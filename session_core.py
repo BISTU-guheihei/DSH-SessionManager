@@ -6,7 +6,7 @@
 - 回收站（删除先入回收站，可恢复；purge 彻底删除）
 - 归档 / 取消归档（复用 DSH 的 archivedSessionIds 机制）
 - 清理缓存残留 + 清理结果校验
-- DSH 运行检测（清理/删除前提示）
+- DSH 运行检测（归档 / 清理缓存等缓存类操作前提示）
 - 命令行界面（list / search / delete / purge / trash / restore / archive 等）
 - 跨平台：Windows / macOS / Linux 路径编码与进程检测
 '''

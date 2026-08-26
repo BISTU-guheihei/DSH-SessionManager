@@ -11,7 +11,7 @@ build_exe.py —— 把 DSH 会话管理器打包成独立可执行文件。
 1. 强制使用项目 .venv（没有则自动创建），不污染系统 Python；
 2. 在 .venv 中安装/升级 pyinstaller + pillow；
 3. 准备图标（whalegirl 鲸鱼娘 .ico 优先；缺失时从 PNG 生成/本地绘制备用）；
-4. 把 assets（壁纸/瓶子/logo）随程序打包；
+4. 把 assets（鲸鱼娘 logo / 头像 / 窗口图标）随程序打包；
 5. PyInstaller 单文件打包。
 '''
 
@@ -215,7 +215,7 @@ def run_pyinstaller():
         if png_icon.exists():
             command += ['--icon', str(png_icon)]
 
-    # 数据文件：assets（壁纸/瓶子/logo）+ whalegirl 图标
+    # 数据文件：assets（鲸鱼娘 logo / 头像 / 窗口图标）+ whalegirl 图标
     sep = ';' if IS_WINDOWS else ':'
     for asset_name in os.listdir(ASSETS_DIR):
         asset_path = ASSETS_DIR / asset_name
