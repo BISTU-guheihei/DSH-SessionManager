@@ -286,6 +286,7 @@ class DarkDialog(tk.Toplevel):
                  fg=DANGER if danger_title else TEXT,
                  anchor='w', justify='left', wraplength=430).pack(side='left', fill='x')
 
+
         # 消息区（自动换行）
         msg_frame = tk.Frame(inner, bg=CARD)
         msg_frame.pack(fill='x', pady=(10, 6))
@@ -329,11 +330,36 @@ class DarkDialog(tk.Toplevel):
 
         self.update_idletasks()
         self._center(parent)
+        # 对话框标题栏也深色化（Windows）
+        self._apply_dark_titlebar()
         self.grab_set()
         self.focus_set()
         if self._buttons:
             first_btn = next(iter(self._buttons))
             first_btn.focus_set()
+
+    def _apply_dark_titlebar(self):
+        '''把对话框的 Windows 标题栏设为深色。'''
+        if sys.platform != 'win32':
+            return
+        try:
+            import ctypes
+            self.update_idletasks()
+            hwnd = _top_hwnd(self)
+            if not hwnd:
+                return
+            dwmapi = ctypes.windll.dwmapi
+            value = ctypes.c_int(1)
+            for attr in (20, 19):
+                try:
+                    if dwmapi.DwmSetWindowAttribute(hwnd, attr,
+                                                    ctypes.byref(value),
+                                                    ctypes.sizeof(value)) == 0:
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
     def _center(self, parent):
         pw, ph = parent.winfo_width(), parent.winfo_height()
@@ -560,8 +586,8 @@ class SessionManagerApp:
                              foreground=TEXT_SUB, font=(FONT_FAMILY, 9, 'bold'),
                              borderwidth=0, relief='flat', padding=6)
         self.style.map('Whale.Treeview',
-                       background=[('selected', PRIMARY_LIGHT)],
-                       foreground=[('selected', '#AEBEFF')])
+                       background=[('selected', '#3A465E')],
+                       foreground=[('selected', '#FFFFFF')])
         self.style.map('Whale.Treeview.Heading', background=[('active', CARD_2)])
 
         columns = ('size', 'mtime', 'note')
