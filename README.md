@@ -1,6 +1,6 @@
 # DSH 会话管理器 · 鲸鱼娘 🐋
 
-DeepSeek Harness (DSH) 的会话管理工具：可视化 / 命令行查看、**回收站删除（可恢复）**、**归档/恢复**、搜索过滤、缓存清理，并带一个 **DeepSeek 鲸鱼娘主题** 的精美图形界面。
+DeepSeek Harness (DSH) 的会话管理工具：可视化 / 命令行查看、**回收站删除（可恢复）**、**归档/恢复**、搜索过滤、缓存清理，并带一个 **DeepSeek 鲸鱼娘主题** 的精美深色图形界面。
 
 聊天记录实际存储在 `~/.dsh/sessions/`（工作区文件夹 → 会话文件夹 → `session.jsonl.zstd`），
 索引在 `~/.dsh/storages/workspace.json`（含 `archivedSessionIds` 归档标记），
@@ -12,17 +12,49 @@ DeepSeek Harness (DSH) 的会话管理工具：可视化 / 命令行查看、**�
 | 功能 | 说明 |
 |------|------|
 | 🗑 回收站 | 删除先进回收站（`~/.dsh/.trash/`），可随时恢复；彻底删除才释放空间 |
-| 🗂 归档 / 恢复 | 复用 DSH 的 `archivedSessionIds` 机制，把会话从活跃列表隐藏 / 恢复 |
+| 🗂 归档 / 恢复 | 复用 DSH 的 `archivedSessionIds` 机制，把会话从活跃列表隐藏 / 恢复（按钮文字随选中状态自动切换） |
 | 📊 统计详情 | 显示轮数、步骤、LLM/工具耗时、Token 用量、上下文压力（动画进度条） |
 | 🔍 搜索过滤 | 命令行 `search` 按标题 / 会话 ID / 工作区名搜索 |
-| 🛡 安全保护 | 当前会话永不删除；删除前确认；DSH 运行中清理缓存会提示（会被写回覆盖） |
+| 🔄 实时监视 | GUI 每 3 秒自动静默刷新（保留选择），新会话出现 / 删除消失自动反映；孤儿缓存实时计数 |
+| 🛡 安全保护 | 当前会话永不删除；删除前确认；当前会话 / 工作区高亮与选中区分 |
 | ✓ 清理校验 | `clean` 后自动复查，报告是否仍有残留（例如被运行中的 DSH 写回） |
+| 🎨 鲸鱼娘主题 | 深色护眼配色（黑灰底 + DeepSeek 蓝点缀）、圆形头像、渐变按钮（投影/上浮/按压）、深色对话框 |
 | 🌍 跨平台 | Windows / macOS / Linux 均可源码运行；`build-exe` 支持三平台打包 |
-| 🎨 简约风 | 浅灰底 + 白卡片 + DeepSeek 蓝点缀；鲸鱼娘圆形头像；hover 过渡动画 |
+
+## 📥 下载与安装
+
+### Windows（推荐：直接下载 exe）
+
+从 **GitHub Releases** 下载 `DSH_SessionManager.exe`（单文件，无需安装 Python）：
+
+- 双击打开图形界面（无黑色终端窗口）；
+- 或在命令行中执行（`list / delete / trash / restore / clean` 等全部可用）；
+- exe 已内嵌鲸鱼娘图标与全部资源，可单独复制到任何 Windows 电脑使用。
+
+### Linux / macOS（使用源码 + 构建脚本）
+
+> 说明：PyInstaller **不支持交叉编译**——Linux / macOS 版本需要在对应系统上自行构建（本仓库不提供预编译的 Linux / macOS 二进制）。
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/BISTU-guheihei/DSH-SessionManager.git
+cd DSH-SessionManager
+
+# 2. 源码直接运行（需 Python 3.8+ 与 tkinter）
+python3 manage_sessions.py           # 打开图形界面
+python3 manage_sessions.py list      # 命令行查看
+
+# 3. 生成独立可执行文件（可选）
+python3 manage_sessions.py build-exe # 自动创建 .venv 并打包
+```
+
+- Linux 需先安装 tkinter：`sudo apt install python3-tk`；
+- 构建产物：Linux → `dist/DSH_SessionManager`（ELF 可执行文件）；macOS → `dist/DSH_SessionManager`（.icns 图标二进制）；
+- 也提供了 [GitHub Actions 工作流](.github/workflows/build.yml)，推送 `v*` 标签即可在云端自动产出 Windows exe 与 Linux 二进制（可作为替代打包方式）。
 
 ## 环境要求
 
-- **Python 3.8+**（推荐 3.10+；GUI 仅需标准库 tkinter，Pillow 可选）；
+- **Python 3.8+**（推荐 3.10+；GUI 仅需标准库 tkinter）；
 - Linux 需 `sudo apt install python3-tk`（macOS 自带）；
 - 支持环境变量 `DSH_HOME` 覆盖数据目录、`DSH_SESSION_ID` 指定受保护会话；
 - 工具读取**本机当前用户的 DSH 数据**，换机器 / 换用户自动指向各自的 `~/.dsh`。
@@ -38,8 +70,8 @@ python manage_sessions.py gui      # 同上
 
 - 顶部：鲸鱼娘圆形头像、标题、**会话 / 回收站视图切换**；
 - 左侧：工作区 → 会话树（当前会话 🛡 受保护、已归档 🗂 置灰标记）；
-- 右侧：选中会话的**统计详情**（轮数 / 步骤 / 耗时 / Token / 上下文压力条，可滚动）+ 操作按钮；
-- 底部：状态栏 + **DSH 运行状态呼吸灯**（运行中 = 绿色，提示缓存会被写回）。
+- 右侧：选中会话的**统计详情**（轮数 / 步骤 / 耗时 / Token / 上下文压力条，可滚动）+ 操作按钮（删除 / 归档 / 恢复 / 清理）；
+- 底部：状态栏 + **DSH 运行状态呼吸灯**（运行中 = 绿色）+ 孤儿缓存实时计数。
 
 ## 命令行
 
@@ -58,6 +90,29 @@ python manage_sessions.py status         # DSH 运行状态 / 回收站概况
 python manage_sessions.py build-exe      # 生成独立可执行文件
 ```
 
+## 为什么选择本工具？
+
+**1. 删除可反悔 —— 回收站机制**
+其他 DSH 会话删除往往直接物理删除、不可恢复；本工具删除先入回收站，误删可随时恢复，彻底删除才真正释放空间。
+
+**2. 清理最彻底 —— 缓存同步清理 + 结果校验**
+删除会话时同步清理 `workspace.json` 与 `session_projcache.json` 的残留记录；`clean` 后自动复查，报告是否仍有孤儿（例如 DSH 运行中写回导致的残留），不留脏数据。
+
+**3. DSH 运行中也能用 —— 无需关闭应用**
+删除 / 恢复 / 彻底删除只操作会话文件，DSH 运行中直接执行；配合"重载 / F5"同步列表，全程无需重启 DSH。
+
+**4. 实时可见 —— 自动监视**
+GUI 每 3 秒静默刷新，DSH 里新建 / 删除会话自动反映；状态栏实时显示孤儿缓存数量与 DSH 运行状态。
+
+**5. 双重操作方式 —— GUI + 命令行**
+图形界面适合日常管理（深色鲸鱼娘主题、统计详情、动画交互）；命令行适合脚本化 / 无界面环境（`delete-old`、`clean --yes` 等）。
+
+**6. 安全设计**
+当前会话自动保护、危险操作双重确认、当前会话 / 选中项高亮区分；归档只隐藏不删除，数据永远保留在磁盘。
+
+**7. 零依赖、可打包、跨平台**
+运行时仅用 Python 标准库（tkinter）；可打成单文件 exe 随处携带；Windows / macOS / Linux 均可运行或自行打包。
+
 ## 生成独立可执行文件
 
 ```bash
@@ -70,8 +125,6 @@ python manage_sessions.py build-exe
 - 打包 `assets/`（鲸鱼娘 logo / 头像 / 窗口图标）随程序分发；
 - **跨平台**：Windows 产出 `dist\DSH_SessionManager.exe`（`--windowed` 双击无黑窗）；
   macOS 产出 `.icns` 图标的 `--windowed` 二进制；Linux 产出带 PNG 图标的二进制。
-
-Windows 下双击 exe 打开图形界面；在命令行执行 `DSH_SessionManager.exe list / delete / trash / restore / clean` 等同样可用。
 
 > 说明：`build-exe` 是源码项目里的开发/构建命令；exe 本身已包含图形界面 + 全部命令行功能，可单独复制使用。
 
