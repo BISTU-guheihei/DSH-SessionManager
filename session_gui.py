@@ -584,6 +584,7 @@ class SessionManagerApp:
         if self.view == 'sessions':
             self.workspaces = get_workspaces()
             self._populate_sessions()
+            self._update_archive_button()
         else:
             self.trash_items = list_trash_items()
             self._populate_trash()
@@ -670,6 +671,7 @@ class SessionManagerApp:
     # 选择与详情
     # ------------------------------------------------------------------
     def _on_select(self, _e):
+        self._update_archive_button()
         selection = self.tree.selection()
         if len(selection) == 1:
             item = self.item_data.get(selection[0])
@@ -677,6 +679,20 @@ class SessionManagerApp:
                 self._show_detail(item['data'], item['kind'])
                 return
         self._show_detail(None, None)
+
+    def _update_archive_button(self):
+        '''根据选中会话的归档状态动态更新按钮文字。'''
+        targets, _ = self._selected_items('session')
+        if not targets:
+            self.btn_archive.set_text('归档选中')
+            return
+        archived_count = sum(1 for t in targets if t['is_archived'])
+        if archived_count == 0:
+            self.btn_archive.set_text('归档选中')
+        elif archived_count == len(targets):
+            self.btn_archive.set_text('取消归档')
+        else:
+            self.btn_archive.set_text('切换归档')
 
     def _show_detail(self, data, kind):
         self._detail_state = (data, kind)
@@ -935,21 +951,36 @@ class SessionManagerApp:
         if not targets:
             messagebox.showinfo('提示', '请先选择要归档 / 取消归档的会话。', parent=self.root)
             return
-        has_archived = any(t['is_archived'] for t in targets)
-        action = '取消归档' if has_archived else '归档'
+        # 分别处理：已归档的取消，未归档的归档（混合选择时各自归位）
+        to_archive = [t for t in targets if not t['is_archived']]
+        to_unarchive = [t for t in targets if t['is_archived']]
+        parts = []
+        if to_archive:
+            parts.append(f'归档 {len(to_archive)} 个')
+        if to_unarchive:
+            parts.append(f'取消归档 {len(to_unarchive)} 个')
+        action_desc = '、'.join(parts)
         if not messagebox.askyesno(
-                action,
-                f'将{action} {len(targets)} 个会话。\n\n'
-                '归档会把会话从 DSH 的活跃列表隐藏（数据保留在磁盘）。\n确认继续吗？',
+                '归档操作',
+                f'将{action_desc}会话。\n\n'
+                '归档会把会话从 DSH 的活跃列表隐藏（数据保留在磁盘），'
+                '取消归档则恢复显示。\n确认继续吗？',
                 icon='question', parent=self.root):
             return
-        self._warn_dsh_running(action)
-        ids = [t['session_id'] for t in targets]
-        if set_archived(ids, not has_archived):
-            self.refresh()
-            self.status_var.set(f'已{action} {len(ids)} 个会话')
-        else:
+        self._warn_dsh_running(action_desc)
+        failed = False
+        if to_archive:
+            if not set_archived([t['session_id'] for t in to_archive], True):
+                failed = True
+        if to_unarchive:
+            if not set_archived([t['session_id'] for t in to_unarchive], False):
+                failed = True
+        if failed:
             messagebox.showerror('失败', '写入 workspace.json 失败。', parent=self.root)
+            return
+        self.refresh()
+        self.status_var.set(f'已完成：{action_desc}')
+        self._update_archive_button()
 
     def _delete_old(self):
         targets = [
