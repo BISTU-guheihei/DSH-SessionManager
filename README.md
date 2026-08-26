@@ -1,18 +1,31 @@
-# DSH 会话管理工具
+# DSH 会话管理器 · 鲸鱼娘 🐋
 
-`manage_sessions.py` 用来查看 / 删除 DSH 的历史聊天记录，提供 **图形界面** 和 **命令行** 两种方式。
+DeepSeek Harness (DSH) 的会话管理工具：可视化 / 命令行查看、**回收站删除（可恢复）**、**归档/恢复**、搜索过滤、缓存清理，并带一个 **DeepSeek 鲸鱼娘主题** 的精美图形界面。
 
-聊天记录实际存储在 `~/.dsh/sessions/` 里，按“工作区文件夹 -> 会话文件夹 -> session.jsonl.zstd”组织。
-此外 `~/.dsh/storages/workspace.json` 和 `~/.dsh/storages/session_projcache.json` 里还有会话索引/缓存，
-本工具删除时会 **同步清理这些缓存，不留残留**。
+聊天记录实际存储在 `~/.dsh/sessions/`（工作区文件夹 → 会话文件夹 → `session.jsonl.zstd`），
+索引在 `~/.dsh/storages/workspace.json`（含 `archivedSessionIds` 归档标记），
+统计缓存在 `~/.dsh/storages/session_projcache.json`。
+本工具删除会话时**同步清理这些缓存，不留残留**。
+
+## ✨ 功能亮点
+
+| 功能 | 说明 |
+|------|------|
+| 🗑 回收站 | 删除先进回收站（`~/.dsh/.trash/`），可随时恢复；彻底删除才释放空间 |
+| 🗂 归档 / 恢复 | 复用 DSH 的 `archivedSessionIds` 机制，把会话从活跃列表隐藏 / 恢复 |
+| 📊 统计详情 | 显示轮数、步骤、LLM/工具耗时、Token 用量、上下文压力（动画进度条） |
+| 🔍 搜索过滤 | 按标题 / 会话 ID / 工作区名实时过滤 |
+| 🛡 安全保护 | 当前会话永不删除；删除前确认；DSH 运行中清理缓存会提示（会被写回覆盖） |
+| ✓ 清理校验 | `clean` 后自动复查，报告是否仍有残留（例如被运行中的 DSH 写回） |
+| 🌍 跨平台 | Windows / macOS / Linux 均可源码运行；`build-exe` 支持三平台打包 |
+| 🎨 鲸鱼娘主题 | 壁纸背景、圆形头像、瓶子装饰、圆角卡片、hover 渐变、点击涟漪、呼吸状态灯 |
 
 ## 环境要求
 
-- **Python 3.8+**（3.6+ 即可运行，推荐 3.10+；仅用到标准库，无第三方运行时依赖）；
-- **图形界面** 需要 Tkinter（Windows 官方安装包自带；Linux 需 `sudo apt install python3-tk` 之类）；
-- 工具读取的是 **本机当前用户的 DSH 数据**（`~/.dsh`，即 `%USERPROFILE%\.dsh`），
-  换台机器 / 换个用户运行时，会自动指向该用户自己的 DSH 数据，与本项目所在位置无关；
-- 也支持用环境变量 `DSH_HOME` 覆盖 DSH 数据目录（默认 `~/.dsh`）。
+- **Python 3.8+**（推荐 3.10+；GUI 仅需标准库 tkinter，Pillow 可选）；
+- Linux 需 `sudo apt install python3-tk`（macOS 自带）；
+- 支持环境变量 `DSH_HOME` 覆盖数据目录、`DSH_SESSION_ID` 指定受保护会话；
+- 工具读取**本机当前用户的 DSH 数据**，换机器 / 换用户自动指向各自的 `~/.dsh`。
 
 ## 图形界面
 
@@ -21,70 +34,59 @@ python manage_sessions.py          # 无参数时默认打开图形界面
 python manage_sessions.py gui      # 同上
 ```
 
-界面会清晰列出：
+界面包含：
 
-- 每个工作区的名字、会话数量、占用大小、最后修改时间；
-- 每个工作区下面嵌套显示它的每个会话（标题、大小、最后修改时间）；
-- 当前正在进行的会话会标记为“受保护”，不会被误删；
-- 支持多选，可以删除指定会话、删除整个工作区（含其全部会话）、删除全部历史会话；
-- 删除最后一个会话后，空工作区会自动清理；也可点“清理缓存残留”清理孤儿缓存。
+- 顶部：鲸鱼娘圆形头像、标题、搜索框、**会话 / 回收站视图切换**；
+- 左侧：工作区 → 会话树（当前会话 🛡 受保护、已归档 🗂 置灰标记）；
+- 右侧：选中会话的**统计详情**（轮数 / 步骤 / 耗时 / Token / 上下文压力条）；
+- 底部：状态栏 + **DSH 运行状态呼吸灯**（运行中 = 绿色，提示缓存会被写回）；
+- 按钮：删除→回收站、归档、恢复、彻底删除、删除历史会话、清理缓存残留、清空回收站。
 
 ## 命令行
 
 ```bash
-python manage_sessions.py list         # 按工作区分组列出所有会话
-python manage_sessions.py delete 1 3   # 删除编号为 1 和 3 的会话
-python manage_sessions.py delete-old   # 删除所有“非当前”且超过 1 小时的历史会话
-python manage_sessions.py clean        # 清理缓存/磁盘中的孤儿残留
+python manage_sessions.py list           # 按工作区分组列出所有会话（含统计）
+python manage_sessions.py search 关键词   # 按标题 / ID / 工作区搜索
+python manage_sessions.py delete 1 3     # 把编号 1、3 的会话移入回收站（可恢复）
+python manage_sessions.py delete-old     # 移入回收站所有“非当前”且超 1 小时的历史会话
+python manage_sessions.py archive 1 3    # 归档会话（从 DSH 活跃列表隐藏）
+python manage_sessions.py unarchive 1 3  # 取消归档
+python manage_sessions.py trash          # 列出回收站
+python manage_sessions.py restore 1 3    # 从回收站恢复到原工作区
+python manage_sessions.py empty-trash    # 彻底清空回收站（不可恢复！）
+python manage_sessions.py clean [--yes]  # 清理缓存/磁盘孤儿残留 + 结果校验
+python manage_sessions.py status         # DSH 运行状态 / 回收站概况
+python manage_sessions.py build-exe      # 生成独立可执行文件
 ```
 
-## 生成独立 exe
-
-> ⚠️ **仅限 Windows**：`build-exe` 使用 PyInstaller 的 `--windowed` 模式和
-> `.venv\Scripts\python.exe`、`.ico` 等 Windows 专属路径，**在 macOS / Linux 上无法打包**。
-> 主功能（`gui` / `list` / `delete` / `delete-old` / `clean`）本身不依赖 Windows，可在各平台直接以源码方式运行。
+## 生成独立可执行文件
 
 ```bash
 python manage_sessions.py build-exe
 ```
 
-生成过程：
+- 自动使用项目 `.venv`（没有则自动创建），**不污染系统 Python**；
+- 自动安装 / 升级 `pyinstaller` + `pillow`；
+- 优先使用 whalegirl 鲸鱼娘图标（缺失时自动从 PNG 生成 / 下载 CC0 备用图 / 本地绘制）；
+- 打包 `assets/`（壁纸、瓶子装饰、logo）随程序分发；
+- **跨平台**：Windows 产出 `dist\DSH_SessionManager.exe`（`--windowed` 双击无黑窗）；
+  macOS 产出 `.icns` 图标的 `--windowed` 二进制；Linux 产出带 PNG 图标的二进制。
 
-- 自动使用项目里的 `.venv` 虚拟环境，不会用系统 Python 安装任何包；
-- 自动在 `.venv` 里安装/升级 `pyinstaller` 和 `pillow`；
-- 自动从 Wikimedia Commons 下载 CC0 授权的 Q 版萌系少女图标（网络失败时会使用本地绘制的备用图标）；
-- 用 PyInstaller `--onefile --windowed` 打出单个 exe，并把图标嵌入 exe；
-- `--windowed` 保证双击 exe 打开图形界面时不会弹出黑色终端窗口。
+Windows 下双击 exe 打开图形界面；在命令行执行 `DSH_SessionManager.exe list / delete / trash / restore / clean` 等同样可用。
 
-生成结果：
-
-```text
-dist\DSH_SessionManager.exe
-```
-
-这个 exe 包含图形界面和全部命令行功能，可以单独复制使用：
-
-```bash
-DSH_SessionManager.exe                    # 双击打开图形界面（无黑色终端窗口）
-DSH_SessionManager.exe list               # 在已有命令行窗口中查看工作区/会话
-DSH_SessionManager.exe delete 1 3         # 删除指定会话
-DSH_SessionManager.exe delete-old         # 删除历史会话
-DSH_SessionManager.exe clean              # 清理残留
-```
-
-> 说明：`build-exe` 是源码项目里的开发/构建命令，用来生成这个 exe；exe 本身已经包含全部运行时功能（图形界面 + 会话管理命令行）。
+> 说明：`build-exe` 是源码项目里的开发/构建命令；exe 本身已包含图形界面 + 全部命令行功能，可单独复制使用。
 
 ## 安全说明
 
-- 当前会话（环境变量 `DSH_SESSION_ID` 指定；若未设置则自动保护最近修改的会话）永远不会被删除；
-- 删除前会弹出确认框 / 要求输入 `yes`；
-- 删除的会话不可恢复，请确认好再操作。
+- 当前会话（`DSH_SESSION_ID`；未设置则自动保护最近修改的会话）永远不会被删除；
+- 删除默认进回收站；**`empty-trash` / “彻底删除”不可恢复**，操作前有确认；
+- **DSH 运行中**：删除/清理对缓存的修改可能被 DSH 写回覆盖（会话文件本身不受影响），工具会弹出提示，建议先完全退出 DSH；
+- 归档只隐藏不删除，数据保留在磁盘。
 
 ## 许可证与素材版权
 
-- **代码**：本仓库代码采用 [MIT License](LICENSE)；
-- **图标素材**：`whalegirl/` 目录中的鲸鱼娘图标
-  （`DeepSeekHarness-WhaleGirl.ico`、`improved-1.png` 等）来自
+- **代码**：[MIT License](LICENSE)；
+- **图标素材**：`whalegirl/` 鲸鱼娘图标来自
   [deepseek-whale-girl-icon](https://github.com/fornarwhal/deepseek-whale-girl-icon)，
-  采用 **CC BY-NC-SA 4.0** 许可（须署名、非商业用途、相同方式共享），
-  与代码的 MIT 许可相互独立；如需商用图标请自行替换为 CC0 等可商用素材。
+  **CC BY-NC-SA 4.0**（须署名、非商用、相同方式共享），与代码 MIT 相互独立；商用请替换为 CC0 素材；
+- **壁纸 / 瓶子**：`bizhi/` 目录（用户提供），请勿商用。
