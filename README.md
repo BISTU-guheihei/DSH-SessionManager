@@ -23,17 +23,30 @@ DeepSeek Harness (DSH) 的会话管理工具：可视化 / 命令行查看、**�
 
 ## 📥 下载与安装
 
-### Windows（推荐：直接下载 exe）
+### Windows（直接下载 exe）
 
-从 **GitHub Releases** 下载 `DSH_SessionManager.exe`（单文件，无需安装 Python）：
+从 **GitHub Releases** 下载 `DSH_SessionManager-windows.zip`（单文件 exe，无需安装 Python）：
 
 - 双击打开图形界面（无黑色终端窗口）；
 - 或在命令行中执行（`list / delete / trash / restore / clean` 等全部可用）；
 - exe 已内嵌鲸鱼娘图标与全部资源，可单独复制到任何 Windows 电脑使用。
 
-### Linux / macOS（使用源码 + 构建脚本）
+### Linux（直接下载二进制）
 
-> 说明：PyInstaller **不支持交叉编译**——Linux / macOS 版本需要在对应系统上自行构建（本仓库不提供预编译的 Linux / macOS 二进制）。
+从 **GitHub Releases** 下载 `DSH_SessionManager-linux.zip`（ELF 可执行文件，由 GitHub Actions 在 Ubuntu 上自动构建）：
+
+```bash
+unzip DSH_SessionManager-linux.zip
+chmod +x DSH_SessionManager
+./DSH_SessionManager            # 打开图形界面
+./DSH_SessionManager list       # 命令行查看
+```
+
+> 注意：GUI 需要 tkinter，若缺少请先安装：`sudo apt install python3-tk`（命令行功能不受影响）。
+
+### macOS / 其他平台（使用源码 + 构建脚本）
+
+> 说明：PyInstaller **不支持交叉编译**，目前 Release 提供 Windows 与 Linux 预编译产物；macOS 版本请在对应系统上自行构建。
 
 ```bash
 # 1. 克隆仓库
@@ -48,8 +61,7 @@ python3 manage_sessions.py list      # 命令行查看
 python3 manage_sessions.py build-exe # 自动创建 .venv 并打包
 ```
 
-- Linux 需先安装 tkinter：`sudo apt install python3-tk`；
-- 构建产物：Linux → `dist/DSH_SessionManager`（ELF 可执行文件）；macOS → `dist/DSH_SessionManager`（.icns 图标二进制）；
+- 构建产物：Windows → `dist\DSH_SessionManager.exe`；Linux → `dist/DSH_SessionManager`（ELF）；macOS → `dist/DSH_SessionManager`（.icns 图标二进制）；
 - 也提供了 [GitHub Actions 工作流](.github/workflows/build.yml)，推送 `v*` 标签即可在云端自动产出 Windows exe 与 Linux 二进制（可作为替代打包方式）。
 
 ## 环境要求
