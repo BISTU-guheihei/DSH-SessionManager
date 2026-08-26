@@ -1006,43 +1006,69 @@ class SessionManagerApp:
 
 
 # ----------------------------------------------------------------------
-# 入口 + Windows 图标
+# 入口 + Windows 图标 / 深色标题栏
 # ----------------------------------------------------------------------
-def _set_windows_icons(root, ico_path, png32_path):
-    '''设置 Windows 窗口图标：标题栏 + 任务栏 + Alt-Tab。
+def _top_hwnd(root):
+    '''获取真正的顶层窗口 HWND（Tk winfo_id 只是内部子窗口）。'''
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        return user32.GetAncestor(root.winfo_id(), 2)  # GA_ROOT
+    except Exception:
+        return None
 
-    任务栏图标由顶层窗口的 WM_SETICON(ICON_BIG) 决定。
-    tkinter 的 winfo_id() 返回的是 Tk 内部子窗口 HWND，必须用
-    GetAncestor(GA_ROOT) 拿到真正的顶层窗口再发消息。
-    '''
+
+def _apply_window_icon(hwnd, ico_path):
+    '''向顶层窗口发送 WM_SETICON（小图标=标题栏，大图标=任务栏/Alt-Tab）。'''
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        WM_SETICON = 0x0080
+        IMAGE_ICON = 1
+        LR_LOADFROMFILE = 0x0010
+        hinst = kernel32.GetModuleHandleW(None)
+        for size, which in ((16, 0), (32, 1), (48, 1)):
+            hicon = user32.LoadImageW(hinst, str(ico_path), IMAGE_ICON,
+                                      size, size, LR_LOADFROMFILE)
+            if hicon:
+                user32.SendMessageW(hwnd, WM_SETICON, which, hicon)
+        return True
+    except Exception:
+        return False
+
+
+def _apply_dark_titlebar(hwnd):
+    '''把窗口标题栏设为深色（Windows 10 1809+ / Windows 11）。'''
+    try:
+        import ctypes
+        dwmapi = ctypes.windll.dwmapi
+        value = ctypes.c_int(1)
+        # 20 = DWMWA_USE_IMMERSIVE_DARK_MODE (Win11/Win10 20H1+)
+        # 19 = 同属性旧值 (Win10 1809-1909)
+        for attr in (20, 19):
+            if dwmapi.DwmSetWindowAttribute(hwnd, attr,
+                                            ctypes.byref(value),
+                                            ctypes.sizeof(value)) == 0:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def _set_process_app_id():
+    '''必须在任何窗口创建之前调用：让任务栏把 exe 图标与进程关联。'''
     if sys.platform == 'win32':
         try:
             import ctypes
-            try:
-                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                    'DSH.SessionManager.WhaleGirl')
-            except Exception:
-                pass
-            root.update_idletasks()
-            try:
-                user32 = ctypes.windll.user32
-                kernel32 = ctypes.windll.kernel32
-                GA_ROOT = 2
-                WM_SETICON = 0x0080
-                ICON_SMALL, ICON_BIG = 0, 1
-                IMAGE_ICON = 1
-                LR_LOADFROMFILE = 0x0010
-                hwnd = user32.GetAncestor(root.winfo_id(), GA_ROOT)
-                hinst = kernel32.GetModuleHandleW(None)
-                for size, which in ((16, ICON_SMALL), (32, ICON_BIG), (48, ICON_BIG)):
-                    hicon = user32.LoadImageW(hinst, str(ico_path), IMAGE_ICON,
-                                              size, size, LR_LOADFROMFILE)
-                    if hicon:
-                        user32.SendMessageW(hwnd, WM_SETICON, which, hicon)
-            except Exception:
-                pass
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                'DSH.SessionManager.WhaleGirl')
         except Exception:
             pass
+
+
+def _set_windows_icons(root, ico_path, png32_path):
+    '''设置 Windows 窗口图标：标题栏 + 任务栏 + Alt-Tab，并深色化标题栏。'''
     if ico_path:
         try:
             root.iconbitmap(default=ico_path)
@@ -1056,6 +1082,28 @@ def _set_windows_icons(root, ico_path, png32_path):
         except Exception:
             pass
 
+    if sys.platform == 'win32' and ico_path:
+        root.update_idletasks()
+        hwnd = _top_hwnd(root)
+        if hwnd:
+            _apply_window_icon(hwnd, ico_path)
+            _apply_dark_titlebar(hwnd)
+            # Tk 在窗口映射时会重置图标 -> 绑定 Map 事件 + 多次延迟重设
+            def _reapply(_e=None):
+                h = _top_hwnd(root)
+                if h:
+                    _apply_window_icon(h, ico_path)
+                    _apply_dark_titlebar(h)
+            try:
+                root.bind('<Map>', _reapply)
+            except Exception:
+                pass
+            for delay in (300, 800, 1600, 3000):
+                try:
+                    root.after(delay, _reapply)
+                except Exception:
+                    pass
+
 
 def launch_gui():
     try:
@@ -1063,6 +1111,8 @@ def launch_gui():
     except Exception:
         print('当前环境没有 tkinter，无法启动图形界面。')
         return 1
+    # 关键：AppUserModelID 必须在 Tk 创建窗口之前设置
+    _set_process_app_id()
     try:
         root = tk.Tk()
     except Exception as ex:
@@ -1072,26 +1122,6 @@ def launch_gui():
     ico = _asset(os.path.join('whalegirl', 'DeepSeekHarness-WhaleGirl.ico'))
     png32 = _asset(os.path.join('assets', 'logo32.png'))
     _set_windows_icons(root, ico, png32)
-    # 窗口完全映射后再设置一次（部分系统首次设置被 Tk 覆盖）
-    def _reapply():
-        try:
-            if sys.platform == 'win32':
-                import ctypes
-                user32 = ctypes.windll.user32
-                kernel32 = ctypes.windll.kernel32
-                GA_ROOT = 2
-                WM_SETICON = 0x0080
-                hwnd = user32.GetAncestor(root.winfo_id(), GA_ROOT)
-                hinst = kernel32.GetModuleHandleW(None)
-                hicon = user32.LoadImageW(hinst, str(ico), 1, 32, 32, 0x0010)
-                if hicon:
-                    user32.SendMessageW(hwnd, WM_SETICON, 1, hicon)
-        except Exception:
-            pass
-    try:
-        root.after(400, _reapply)
-    except Exception:
-        pass
 
     try:
         app = SessionManagerApp(root)
