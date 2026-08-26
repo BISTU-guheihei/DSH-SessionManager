@@ -19,15 +19,21 @@ logo = logo.resize((128, 128), Image.LANCZOS)
 logo.save(OUT / 'logo.png', optimize=True)
 print('logo.png', logo.size)
 
-# 2. 圆形裁切 logo（96px，用于顶栏圆形头像）
-circ = Image.open(ROOT / 'whalegirl' / 'improved-1.png').convert('RGBA')
-circ = circ.resize((192, 192), Image.LANCZOS)
-mask = Image.new('L', (192, 192), 0)
+# 2. 圆形裁切 logo（透明底 whale-girl-transparent.png 裁切，44px 适配顶栏）
+circ = Image.open(ROOT / 'whalegirl' / 'whale-girl-transparent.png').convert('RGBA')
+# 居中裁成正方形（保留人物主体）
+w, h = circ.size
+side = min(w, h)
+left = (w - side) // 2
+top = (h - side) // 2
+circ = circ.crop((left, top, left + side, top + side))
+circ = circ.resize((176, 176), Image.LANCZOS)
+mask = Image.new('L', (176, 176), 0)
 from PIL import ImageDraw
 d = ImageDraw.Draw(mask)
-d.ellipse((0, 0, 192, 192), fill=255)
+d.ellipse((4, 4, 172, 172), fill=255)
 circ.putalpha(mask)
-circ = circ.resize((96, 96), Image.LANCZOS)
+circ = circ.resize((44, 44), Image.LANCZOS)
 circ.save(OUT / 'logo_circle.png', optimize=True)
 print('logo_circle.png', circ.size)
 

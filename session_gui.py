@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
-'''DSH 会话管理工具 —— 图形界面模块（简约风）。
+'''DSH 会话管理工具 —— 图形界面模块（深色高级风）。
 
-设计原则：
-- 浅灰背景 + 白色卡片，无壁纸、无装饰噪点
-- 按钮：白底细边框、深色清晰文字，hover 浅蓝过渡
-- DeepSeek 娘化元素：顶栏圆形鲸鱼娘头像、详情空状态 logo
-- 会话 / 回收站双视图；详情面板可滚动
+设计：
+- 深色主题（近黑灰底 + 深灰卡片），护眼不刺眼
+- 统一字体（Microsoft YaHei UI / Segoe UI）
+- 按钮：深灰底渐变，hover 上浮提亮，主按钮 DeepSeek 蓝渐变
+- 顶栏圆形鲸鱼娘头像（透明底）+ 视图切换
+- 详情面板：直接绘制 + 滚动条，内容不被裁剪
 - DSH 运行状态呼吸灯
 
-依赖：tkinter（标准库，无第三方依赖）。
+依赖：tkinter（标准库）。
 '''
 
 import os
@@ -28,33 +29,42 @@ from session_core import (
 
 
 # ----------------------------------------------------------------------
-# 主题（简约 + DeepSeek 蓝点缀）
+# 深色主题
 # ----------------------------------------------------------------------
-BG = '#F2F4F8'              # 窗口底色（浅灰）
-CARD = '#FFFFFF'            # 卡片
-BORDER = '#E2E6EE'          # 卡片/按钮边框
-TEXT = '#1F2937'            # 主文字
-TEXT_SUB = '#6B7280'        # 次要文字
-PRIMARY = '#4D6BFE'         # DeepSeek 蓝
-PRIMARY_DARK = '#3B50D6'
-PRIMARY_LIGHT = '#E8EEFF'
-PRIMARY_GHOST = '#F4F6FF'
-DANGER = '#E5484D'
-DANGER_DARK = '#C93C41'
-DANGER_LIGHT = '#FDECEC'
-SUCCESS = '#22C55E'
-SUCCESS_DARK = '#16A34A'
-WARN = '#F59E0B'
-HOVER_BG = '#EEF2FF'
+BG = '#14161B'              # 窗口底
+CARD = '#1C1F26'            # 卡片
+CARD_2 = '#22262F'          # 次级卡片 / 表头
+BORDER = '#2C313C'          # 边框
+TEXT = '#E7EAF0'            # 主文字
+TEXT_SUB = '#98A0AD'        # 次要文字
+PRIMARY = '#5B7CFA'         # DeepSeek 蓝（深色版更亮）
+PRIMARY_DARK = '#4260D6'
+PRIMARY_LIGHT = '#27314F'   # 选中行背景（深蓝）
+PRIMARY_GHOST = '#212737'   # 表头浅蓝底
+DANGER = '#F06A6A'
+DANGER_DARK = '#C94F4F'
+DANGER_LIGHT = '#3A2428'
+SUCCESS = '#34D399'
+SUCCESS_DARK = '#1FA678'
+WARN = '#F5B94B'
+HOVER_BG = '#262B36'
+DISABLED_FG = '#5A616D'
 
 FONT_FAMILY = 'Microsoft YaHei UI'
 
+_APP_FONTS = {}
+
 
 def _font(size, bold=False):
-    try:
-        return tkfont.Font(family=FONT_FAMILY, size=size, weight='bold' if bold else 'normal')
-    except Exception:
-        return tkfont.Font(size=size, weight='bold' if bold else 'normal')
+    key = (size, bold)
+    if key not in _APP_FONTS:
+        fam = FONT_FAMILY
+        avail = set(tkfont.families())
+        if FONT_FAMILY not in avail:
+            fam = 'Segoe UI' if 'Segoe UI' in avail else 'TkDefaultFont'
+        _APP_FONTS[key] = tkfont.Font(family=fam, size=size,
+                                      weight='bold' if bold else 'normal')
+    return _APP_FONTS[key]
 
 
 def _asset(rel_path):
@@ -83,32 +93,18 @@ def _lerp(c1, c2, t):
 
 
 # ----------------------------------------------------------------------
-# 简约按钮（白底细边框，hover 浅蓝过渡）
+# 高级按钮：深灰渐变底 + hover 提亮上浮
 # ----------------------------------------------------------------------
 class HoverButton(tk.Canvas):
-    '''自绘圆角按钮：白底 + 细边框 + 深色清晰文字；hover 浅蓝过渡。'''
+    '''自绘圆角按钮：垂直渐变底，hover 平滑提亮，主按钮蓝色渐变。'''
 
     def __init__(self, master, text, command=None, *, width=150, height=40,
-                 radius=8, font_size=11, bold=False, danger=False, primary=False,
+                 radius=8, font_size=10, bold=False, danger=False, primary=False,
                  disabled=False):
         self._bw = width
         self._bh = height
         self._br = radius
-        if danger:
-            self._base = CARD
-            self._hover = DANGER_LIGHT
-            self._fg = DANGER
-            self._border = '#F1B8BA'
-        elif primary:
-            self._base = PRIMARY
-            self._hover = PRIMARY_DARK
-            self._fg = '#FFFFFF'
-            self._border = PRIMARY
-        else:
-            self._base = CARD
-            self._hover = PRIMARY_GHOST
-            self._fg = TEXT
-            self._border = BORDER
+        self._style = 'danger' if danger else ('primary' if primary else 'normal')
         self._command = command
         self._disabled = disabled
         self._text = text
@@ -127,18 +123,70 @@ class HoverButton(tk.Canvas):
         else:
             self.configure(cursor='arrow')
 
-    def _current_color(self):
-        return _rgb_to_hex(_lerp(_hex_to_rgb(self._base), _hex_to_rgb(self._hover), self._t))
+    def _palette(self):
+        '''返回 (top, bottom, fg, border, hover_top, hover_bottom)。'''
+        if self._disabled:
+            return '#23262E', '#23262E', DISABLED_FG, '#2C313C', None, None
+        if self._style == 'primary':
+            return PRIMARY, PRIMARY_DARK, '#FFFFFF', PRIMARY_DARK, '#6E8BFF', '#4E6CE8'
+        if self._style == 'danger':
+            return '#3A262B', '#2E1E22', DANGER, '#5A3439', '#4A2E33', '#382428'
+        return CARD_2, '#1A1D24', TEXT, BORDER, '#2E3440', '#252A34'
+
+    def _current(self, field):
+        top, bottom, fg, border, htop, hbot = self._palette()
+        if self._disabled:
+            return {'top': top, 'bottom': bottom, 'fg': fg, 'border': border}.get(field)
+        a = {'top': top, 'bottom': bottom, 'border': border}
+        b = {'top': htop, 'bottom': hbot, 'border': '#3A4150'}
+        return _rgb_to_hex(_lerp(_hex_to_rgb(a[field]), _hex_to_rgb(b[field]), self._t))
 
     def _draw(self):
         self.delete('all')
         w, h, r = self._bw, self._bh, self._br
-        fill = self._current_color() if not self._disabled else '#F3F4F6'
-        self._round_rect(0, 0, w, h, r, fill=fill,
-                         outline=self._border if not self._disabled else '#E5E7EB')
-        fg = self._fg if not self._disabled else '#9CA3AF'
-        self.create_text(w / 2, h / 2 + 1, text=self._text, fill=fg,
-                         font=self._font)
+        top = self._current('top')
+        bottom = self._current('bottom')
+        border = self._current('border')
+        # 渐变底：分 20 段横条
+        steps = 20
+        for i in range(steps):
+            t = i / (steps - 1)
+            color = _rgb_to_hex(_lerp(_hex_to_rgb(top), _hex_to_rgb(bottom), t))
+            y0 = i * h / steps
+            y1 = (i + 1) * h / steps + 1
+            self._round_rect(0, y0, w, y1, r if i == 0 else 0, fill=color, outline='')
+            # 简单圆角：仅第一段和最后一段做圆角
+            if i > 0:
+                self.create_rectangle(0, y0, w, y1, fill=color, outline='')
+        # 重新画整体轮廓圆角（先清后画一次圆角矩形边框）
+        self.delete('all')
+        self._round_rect(0, 0, w, h, r, fill='', outline=border)
+        # 渐变主体
+        for i in range(steps):
+            t = i / (steps - 1)
+            color = _rgb_to_hex(_lerp(_hex_to_rgb(top), _hex_to_rgb(bottom), t))
+            y0 = i * h / steps
+            y1 = (i + 1) * h / steps + 1
+            clip = self._clip_rect_for_band(i, steps, w, h, r)
+            if clip:
+                x0, y0c, x1, y1c = clip
+                self.create_rectangle(x0, y0c, x1, y1c, fill=color, outline='')
+        # 边框
+        self._round_rect(1, 1, w - 1, h - 1, r, fill='', outline=border)
+        fg = self._palette()[2] if not self._disabled else DISABLED_FG
+        self.create_text(w / 2, h / 2 + 1, text=self._text, fill=fg, font=self._font)
+
+    def _clip_rect_for_band(self, i, steps, w, h, r):
+        y0 = i * h / steps
+        y1 = (i + 1) * h / steps + 1
+        x0, x1 = 0.0, float(w)
+        if y0 < r and y1 > r:
+            return None  # 顶部圆角带，跳过矩形直接画
+        if i == 0:
+            x0 = r
+        if i == steps - 1:
+            x1 = w - r
+        return x0, y0, x1, y1
 
     def _round_rect(self, x1, y1, x2, y2, r, **kw):
         pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
@@ -156,7 +204,7 @@ class HoverButton(tk.Canvas):
 
         def step():
             delta = target - self._t
-            if abs(delta) < 0.04:
+            if abs(delta) < 0.05:
                 self._t = target
                 self._draw()
                 self._anim = None
@@ -182,10 +230,10 @@ class HoverButton(tk.Canvas):
 
 
 # ----------------------------------------------------------------------
-# 状态灯（DSH 运行状态，呼吸动画）
+# 状态灯
 # ----------------------------------------------------------------------
 class StatusDot(tk.Canvas):
-    def __init__(self, master, size=12, bg_color=CARD):
+    def __init__(self, master, size=11, bg_color=CARD):
         super().__init__(master, width=size + 6, height=size + 6,
                          highlightthickness=0, bd=0, bg=bg_color)
         self._size = size
@@ -206,12 +254,12 @@ class StatusDot(tk.Canvas):
             self.create_oval(cx - s / 2 - 2, cy - s / 2 - 2, cx + s / 2 + 2, cy + s / 2 + 2,
                              fill=SUCCESS, outline='', stipple='gray50')
         self.create_oval(cx - s / 2, cy - s / 2, cx + s / 2, cy + s / 2,
-                         fill=SUCCESS if self._running else '#C4C9D4', outline='')
+                         fill=SUCCESS if self._running else '#4A505C', outline='')
         self.after(120, self._tick)
 
 
 # ----------------------------------------------------------------------
-# 上下文压力进度条（动画填充）
+# 上下文压力进度条
 # ----------------------------------------------------------------------
 class PressureBar(tk.Canvas):
     def __init__(self, master, width=240, height=10, bg_color=CARD):
@@ -242,9 +290,9 @@ class PressureBar(tk.Canvas):
         self.delete('all')
         w, h = self._bw, self._bh
         r = h / 2
-        self.create_oval(0, 0, h, h, fill='#EDF0F7', outline='')
-        self.create_oval(w - h, 0, w, h, fill='#EDF0F7', outline='')
-        self.create_rectangle(h / 2, 0, w - h / 2, h, fill='#EDF0F7', outline='')
+        self.create_oval(0, 0, h, h, fill='#2A2F3A', outline='')
+        self.create_oval(w - h, 0, w, h, fill='#2A2F3A', outline='')
+        self.create_rectangle(h / 2, 0, w - h / 2, h, fill='#2A2F3A', outline='')
         fw = w * self._cur
         if fw > 2:
             if self._cur < 0.6:
@@ -266,7 +314,7 @@ class PressureBar(tk.Canvas):
 # ----------------------------------------------------------------------
 class SessionManagerApp:
     TOP_H = 62
-    BOT_H = 46
+    BOT_H = 44
 
     def __init__(self, root):
         self.root = root
@@ -279,8 +327,6 @@ class SessionManagerApp:
         self.item_data = {}
         self.view = 'sessions'
         self.trash_items = []
-        self._search_job = None
-        self._resize_job = None
         self._images = []
         self._hover_tags = {}
 
@@ -293,27 +339,26 @@ class SessionManagerApp:
     # UI 构建
     # ------------------------------------------------------------------
     def _build_ui(self):
-        # 顶栏（白）
+        # 顶栏
         self.top_bar = tk.Frame(self.root, bg=CARD, highlightthickness=1,
                                 highlightbackground=BORDER)
         self.top_bar.place(x=0, y=0, relwidth=1, height=self.TOP_H)
 
-        # 鲸鱼娘圆形头像（DeepSeek 娘化元素）
+        # 圆形鲸鱼娘头像（透明底 44px）
         logo_file = _asset(os.path.join('assets', 'logo_circle.png'))
         if logo_file:
             try:
                 logo_img = tk.PhotoImage(file=logo_file)
                 self._images.append(logo_img)
-                tk.Label(self.top_bar, image=logo_img, bg=CARD).place(x=14, y=7)
+                tk.Label(self.top_bar, image=logo_img, bg=CARD).place(x=16, y=9)
             except Exception:
                 pass
 
         tk.Label(self.top_bar, text='DSH 会话管理器', font=_font(14, bold=True),
-                 bg=CARD, fg=TEXT).place(x=68, y=10)
+                 bg=CARD, fg=TEXT).place(x=70, y=9)
         tk.Label(self.top_bar, text='鲸鱼娘守护的会话回收站', font=_font(8),
-                 bg=CARD, fg=TEXT_SUB).place(x=69, y=36)
+                 bg=CARD, fg=TEXT_SUB).place(x=71, y=36)
 
-        # 视图切换（简约标签按钮）
         self.btn_view_sessions = HoverButton(self.top_bar, '会话', self._show_sessions_view,
                                              width=76, height=30, radius=7,
                                              primary=True)
@@ -322,33 +367,32 @@ class SessionManagerApp:
                                           width=76, height=30, radius=7)
         self.btn_view_trash.place(relx=1.0, x=-86, y=16)
 
-        # 底栏（白）
+        # 底栏
         self.bottom_bar = tk.Frame(self.root, bg=CARD, highlightthickness=1,
                                    highlightbackground=BORDER)
         self.bottom_bar.place(x=0, rely=1.0, relwidth=1, height=self.BOT_H, anchor='sw')
-
         self.status_var = tk.StringVar(value='正在加载...')
         tk.Label(self.bottom_bar, textvariable=self.status_var, font=_font(9),
-                 bg=CARD, fg=TEXT_SUB).place(x=14, y=16)
+                 bg=CARD, fg=TEXT_SUB).place(x=14, y=15)
         self.dot = StatusDot(self.bottom_bar)
-        self.dot.place(relx=1.0, x=-150, y=14)
+        self.dot.place(relx=1.0, x=-140, y=14)
         self.dsh_label = tk.Label(self.bottom_bar, text='DSH 状态', font=_font(9),
                                   bg=CARD, fg=TEXT_SUB)
-        self.dsh_label.place(relx=1.0, x=-136, y=16)
+        self.dsh_label.place(relx=1.0, x=-126, y=15)
 
         # 左侧：会话树卡片
         self.left_card = tk.Frame(self.root, bg=CARD, highlightthickness=1,
                                   highlightbackground=BORDER)
         self.left_card.place(relx=0.012, y=self.TOP_H + 10, relwidth=0.60)
 
-        self.tree_header = tk.Frame(self.left_card, bg=PRIMARY_GHOST)
+        self.tree_header = tk.Frame(self.left_card, bg=CARD_2)
         self.tree_header.pack(fill='x')
         self.view_title_var = tk.StringVar(value='会话列表')
         tk.Label(self.tree_header, textvariable=self.view_title_var, font=_font(11, bold=True),
-                 bg=PRIMARY_GHOST, fg=PRIMARY).pack(side='left', padx=14, pady=6)
+                 bg=CARD_2, fg=PRIMARY).pack(side='left', padx=14, pady=6)
         self.count_var = tk.StringVar(value='')
         tk.Label(self.tree_header, textvariable=self.count_var, font=_font(9),
-                 bg=PRIMARY_GHOST, fg=TEXT_SUB).pack(side='right', padx=14)
+                 bg=CARD_2, fg=TEXT_SUB).pack(side='right', padx=14)
 
         tree_frame = tk.Frame(self.left_card, bg=CARD)
         tree_frame.pack(fill='both', expand=True, padx=6, pady=6)
@@ -361,13 +405,13 @@ class SessionManagerApp:
         self.style.configure('Whale.Treeview', background=CARD, fieldbackground=CARD,
                              foreground=TEXT, borderwidth=0, rowheight=32,
                              font=(FONT_FAMILY, 10))
-        self.style.configure('Whale.Treeview.Heading', background=PRIMARY_GHOST,
-                             foreground=PRIMARY, font=(FONT_FAMILY, 9, 'bold'),
+        self.style.configure('Whale.Treeview.Heading', background=CARD_2,
+                             foreground=TEXT_SUB, font=(FONT_FAMILY, 9, 'bold'),
                              borderwidth=0, relief='flat', padding=6)
         self.style.map('Whale.Treeview',
                        background=[('selected', PRIMARY_LIGHT)],
-                       foreground=[('selected', PRIMARY_DARK)])
-        self.style.map('Whale.Treeview.Heading', background=[('active', PRIMARY_LIGHT)])
+                       foreground=[('selected', '#AEBEFF')])
+        self.style.map('Whale.Treeview.Heading', background=[('active', CARD_2)])
 
         columns = ('size', 'mtime', 'note')
         self.tree = ttk.Treeview(tree_frame, columns=columns, style='Whale.Treeview',
@@ -381,11 +425,11 @@ class SessionManagerApp:
         self.tree.column('mtime', width=140, minwidth=105, anchor='center', stretch=False)
         self.tree.column('note', width=120, minwidth=90, anchor='w', stretch=False)
         self.tree.tag_configure('workspace', font=(FONT_FAMILY, 11, 'bold'),
-                                foreground='#374151', background=CARD)
+                                foreground='#C9CEDA', background=CARD)
         self.tree.tag_configure('session', foreground=TEXT, background=CARD)
-        self.tree.tag_configure('current', foreground=PRIMARY, background=PRIMARY_LIGHT,
+        self.tree.tag_configure('current', foreground='#AEBEFF', background=PRIMARY_LIGHT,
                                 font=(FONT_FAMILY, 10, 'bold'))
-        self.tree.tag_configure('archived', foreground='#9CA3AF', background=CARD)
+        self.tree.tag_configure('archived', foreground='#6B7280', background=CARD)
         self.tree.tag_configure('trash_item', foreground=TEXT, background=CARD)
         self.tree.tag_configure('hover', background=HOVER_BG)
 
@@ -424,7 +468,7 @@ class SessionManagerApp:
         self._detail_state = None
         self._detail_views = []
 
-        # 右侧按钮区（网格，清晰）
+        # 右侧按钮区
         self.btn_panel = tk.Frame(self.right_card, bg=CARD)
         self.btn_panel.pack(side='bottom', fill='x', padx=16, pady=(6, 14))
         self._build_buttons()
@@ -465,7 +509,7 @@ class SessionManagerApp:
         self.btn_empty_trash.grid(row=1, column=0, padx=(0, 5), pady=3, sticky='ew')
 
     # ------------------------------------------------------------------
-    # 窗口缩放：卡片高度跟随
+    # 窗口缩放
     # ------------------------------------------------------------------
     def _on_resize(self, e):
         if e.widget is not self.root:
@@ -485,7 +529,7 @@ class SessionManagerApp:
         self.dot.set_running(running)
         self.dsh_label.configure(
             text='DSH 运行中' if running else 'DSH 未运行',
-            fg=SUCCESS_DARK if running else TEXT_SUB)
+            fg=SUCCESS if running else TEXT_SUB)
         self.root.after(8000, self._refresh_dsh_status)
 
     # ------------------------------------------------------------------
@@ -493,16 +537,8 @@ class SessionManagerApp:
     # ------------------------------------------------------------------
     def _sync_view_buttons(self):
         if self.view == 'sessions':
-            self.btn_view_sessions._base = PRIMARY
-            self.btn_view_sessions._fg = '#FFFFFF'
-            self.btn_view_sessions._border = PRIMARY
-            self.btn_view_sessions._t = 0.0
-            self.btn_view_sessions._draw()
-            self.btn_view_trash._base = CARD
-            self.btn_view_trash._fg = TEXT
-            self.btn_view_trash._border = BORDER
-            self.btn_view_trash._t = 0.0
-            self.btn_view_trash._draw()
+            self._set_tab_style(self.btn_view_sessions, True)
+            self._set_tab_style(self.btn_view_trash, False)
             self.view_title_var.set('会话列表')
             self.btn_restore.grid_remove()
             self.btn_purge.grid_remove()
@@ -512,16 +548,8 @@ class SessionManagerApp:
             self.btn_delold.grid()
             self.btn_clean.grid()
         else:
-            self.btn_view_trash._base = PRIMARY
-            self.btn_view_trash._fg = '#FFFFFF'
-            self.btn_view_trash._border = PRIMARY
-            self.btn_view_trash._t = 0.0
-            self.btn_view_trash._draw()
-            self.btn_view_sessions._base = CARD
-            self.btn_view_sessions._fg = TEXT
-            self.btn_view_sessions._border = BORDER
-            self.btn_view_sessions._t = 0.0
-            self.btn_view_sessions._draw()
+            self._set_tab_style(self.btn_view_trash, True)
+            self._set_tab_style(self.btn_view_sessions, False)
             self.view_title_var.set('回收站')
             self.btn_archive.grid_remove()
             self.btn_delete.grid_remove()
@@ -530,6 +558,15 @@ class SessionManagerApp:
             self.btn_restore.grid()
             self.btn_purge.grid()
             self.btn_empty_trash.grid()
+
+    def _set_tab_style(self, btn, active):
+        if active:
+            btn._style = 'primary'
+            btn._t = 0.0
+        else:
+            btn._style = 'normal'
+            btn._t = 0.0
+        btn._draw()
 
     def _show_sessions_view(self):
         if self.view != 'sessions':
@@ -606,7 +643,7 @@ class SessionManagerApp:
             self._on_select(None)
 
     # ------------------------------------------------------------------
-    # 树 hover 高亮
+    # 树 hover
     # ------------------------------------------------------------------
     def _on_tree_motion(self, e):
         row = self.tree.identify_row(e.y)
@@ -665,28 +702,24 @@ class SessionManagerApp:
                 try:
                     img = tk.PhotoImage(file=logo_file)
                     self._images.append(img)
-                    self.detail.create_image(w / 2, 90, image=img)
-                    y = 168
+                    self.detail.create_image(w / 2, 80, image=img)
+                    y = 156
                 except Exception:
-                    y = 56
+                    y = 52
             self.detail.create_text(w / 2, y, text='选一个会话看看吧',
                                     font=_font(11, bold=True), fill=TEXT_SUB)
             self.detail.create_text(w / 2, y + 24,
                                     text='这里会显示会话的统计信息\n（轮数、耗时、Token 用量、上下文压力）',
-                                    font=_font(9), fill='#9CA3AF', justify='center')
+                                    font=_font(9), fill='#6B7280', justify='center')
             self.detail.configure(scrollregion=(0, 0, w, max(self.detail.winfo_height(), 200)))
             return
 
-        inner = tk.Canvas(self.detail, bg=CARD, highlightthickness=0, bd=0)
-        self.detail.create_window(0, 0, window=inner, anchor='nw')
-        self._detail_views.append(inner)
-
         if kind == 'session':
-            content_h = self._draw_session_detail(inner, data, w, pad, y)
+            content_h = self._draw_session_detail(self.detail, data, w, pad, y)
         else:
-            content_h = self._draw_trash_detail(inner, data, w, pad, y)
-        inner.configure(width=max(w - 2, 10), height=max(content_h + 10, 10))
-        self.detail.configure(scrollregion=(0, 0, w, content_h + 10))
+            content_h = self._draw_trash_detail(self.detail, data, w, pad, y)
+        # 直接绘制 + scrollregion：内容完整可滚动，不会被裁剪
+        self.detail.configure(scrollregion=(0, 0, w, max(content_h + 10, self.detail.winfo_height())))
         self.detail.bind('<MouseWheel>', self._on_detail_wheel)
 
     def _on_detail_wheel(self, e):
@@ -712,11 +745,11 @@ class SessionManagerApp:
         y += 34
         badges = []
         if s['is_current']:
-            badges.append(('🛡 当前会话', PRIMARY, PRIMARY_LIGHT))
+            badges.append(('🛡 当前会话', '#AEBEFF', PRIMARY_LIGHT))
         if s['is_archived']:
-            badges.append(('🗂 已归档', '#9CA3AF', '#F3F4F6'))
+            badges.append(('🗂 已归档', '#9CA3AF', '#262B36'))
         if not badges:
-            badges.append(('会话', TEXT_SUB, PRIMARY_GHOST))
+            badges.append(('会话', TEXT_SUB, CARD_2))
         bx = pad + 4
         for text, fg, bg in badges:
             tw = _font(9).measure(text) + 16
@@ -772,7 +805,7 @@ class SessionManagerApp:
         else:
             y += 6
             canvas.create_text(pad + 4, y, text='暂无统计缓存（新会话或 DSH 未记录）',
-                               font=_font(9), fill='#9CA3AF', anchor='w')
+                               font=_font(9), fill='#6B7280', anchor='w')
             y += 22
         return y
 
@@ -973,29 +1006,33 @@ class SessionManagerApp:
 
 
 # ----------------------------------------------------------------------
-# 入口
+# 入口 + Windows 图标
 # ----------------------------------------------------------------------
 def _set_windows_icons(root, ico_path, png32_path):
-    '''设置 Windows 窗口图标（标题栏 + 任务栏 + Alt-Tab）。'''
+    '''设置 Windows 窗口图标：标题栏 + 任务栏 + Alt-Tab。
+
+    任务栏图标由顶层窗口的 WM_SETICON(ICON_BIG) 决定。
+    tkinter 的 winfo_id() 返回的是 Tk 内部子窗口 HWND，必须用
+    GetAncestor(GA_ROOT) 拿到真正的顶层窗口再发消息。
+    '''
     if sys.platform == 'win32':
         try:
             import ctypes
-            # AppUserModelID：让任务栏显示 exe 嵌入的图标而不是 Tk 默认羽毛
             try:
                 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
                     'DSH.SessionManager.WhaleGirl')
             except Exception:
                 pass
-            # 通过 Win32 API 直接设置窗口大小图标（任务栏用大图标 ICON_BIG）
+            root.update_idletasks()
             try:
-                root.update_idletasks()
-                hwnd = root.winfo_id()
                 user32 = ctypes.windll.user32
                 kernel32 = ctypes.windll.kernel32
-                IMAGE_ICON = 1
-                LR_LOADFROMFILE = 0x0010
+                GA_ROOT = 2
                 WM_SETICON = 0x0080
                 ICON_SMALL, ICON_BIG = 0, 1
+                IMAGE_ICON = 1
+                LR_LOADFROMFILE = 0x0010
+                hwnd = user32.GetAncestor(root.winfo_id(), GA_ROOT)
                 hinst = kernel32.GetModuleHandleW(None)
                 for size, which in ((16, ICON_SMALL), (32, ICON_BIG), (48, ICON_BIG)):
                     hicon = user32.LoadImageW(hinst, str(ico_path), IMAGE_ICON,
@@ -1035,6 +1072,26 @@ def launch_gui():
     ico = _asset(os.path.join('whalegirl', 'DeepSeekHarness-WhaleGirl.ico'))
     png32 = _asset(os.path.join('assets', 'logo32.png'))
     _set_windows_icons(root, ico, png32)
+    # 窗口完全映射后再设置一次（部分系统首次设置被 Tk 覆盖）
+    def _reapply():
+        try:
+            if sys.platform == 'win32':
+                import ctypes
+                user32 = ctypes.windll.user32
+                kernel32 = ctypes.windll.kernel32
+                GA_ROOT = 2
+                WM_SETICON = 0x0080
+                hwnd = user32.GetAncestor(root.winfo_id(), GA_ROOT)
+                hinst = kernel32.GetModuleHandleW(None)
+                hicon = user32.LoadImageW(hinst, str(ico), 1, 32, 32, 0x0010)
+                if hicon:
+                    user32.SendMessageW(hwnd, WM_SETICON, 1, hicon)
+        except Exception:
+            pass
+    try:
+        root.after(400, _reapply)
+    except Exception:
+        pass
 
     try:
         app = SessionManagerApp(root)
