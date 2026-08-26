@@ -1045,14 +1045,23 @@ class SessionManagerApp:
     # ------------------------------------------------------------------
     # 操作
     # ------------------------------------------------------------------
-    def _warn_dsh_running(self, action_name):
+    def _warn_cache_action(self, action_name):
+        '''仅缓存类操作（归档/清理）需要提示：DSH 运行时会写回缓存覆盖修改。
+        删除/恢复/彻底删除只动会话文件，不受影响，无需关闭 DSH。'''
         if not detect_dsh_running():
             return True
         return DarkDialog.confirm(
             self.root, 'DSH 正在运行',
-            f'检测到 DSH Desktop 正在运行。\n\n{action_name} 对缓存的修改可能被 DSH 写回覆盖'
-            f'（会话文件本身不受影响）。\n\n建议先完全退出 DSH 再操作。\n\n仍要继续吗？',
+            f'检测到 DSH Desktop 正在运行。\n\n{action_name} 修改的是 DSH 的缓存文件'
+            f'（workspace.json），DSH 运行中可能会把缓存写回覆盖本次修改。\n\n'
+            f'建议先完全退出 DSH 再执行 {action_name}。\n\n仍要继续吗？',
             yes_text='仍要继续', no_text='取消', danger=True)
+
+    def _note_cache_residue(self):
+        '''删除类操作后，若 DSH 运行中，提示缓存可能残留（不影响文件删除本身）。'''
+        if detect_dsh_running():
+            return ' · 提示: DSH 运行中，缓存清理可能被写回，可稍后清理'
+        return ''
 
     def _delete_selected(self):
         targets, blocked = self._selected_items('session')
@@ -1072,11 +1081,11 @@ class SessionManagerApp:
                 f'将把 {len(targets)} 个会话移入回收站（可恢复）：\n\n{names}\n\n确认继续吗？',
                 danger=True):
             return
-        self._warn_dsh_running('删除会话')
         moved, removed_ws, failed = perform_delete_sessions(targets)
         self.refresh()
         self.status_var.set(
-            f'已把 {len(moved)} 个会话移入回收站 · 自动清理 {len(removed_ws)} 个空工作区')
+            f'已把 {len(moved)} 个会话移入回收站 · 自动清理 {len(removed_ws)} 个空工作区'
+            + self._note_cache_residue())
         if failed:
             self._show_failed(failed)
 
@@ -1092,7 +1101,7 @@ class SessionManagerApp:
             return
         purged, failed = purge_trash_items(targets)
         self.refresh()
-        self.status_var.set(f'已彻底删除 {len(purged)} 个条目')
+        self.status_var.set(f'已彻底删除 {len(purged)} 个条目' + self._note_cache_residue())
         if failed:
             self._show_failed(failed)
 
@@ -1108,7 +1117,7 @@ class SessionManagerApp:
             return
         purged, failed = purge_trash_items(items)
         self.refresh()
-        self.status_var.set(f'回收站已清空（{len(purged)} 条）')
+        self.status_var.set(f'回收站已清空（{len(purged)} 条）' + self._note_cache_residue())
         if failed:
             self._show_failed(failed)
 
@@ -1119,7 +1128,7 @@ class SessionManagerApp:
             return
         restored, failed = restore_trash_items(targets)
         self.refresh()
-        self.status_var.set(f'已恢复 {len(restored)} 个会话到原工作区')
+        self.status_var.set(f'已恢复 {len(restored)} 个会话到原工作区' + self._note_cache_residue())
         if failed:
             self._show_failed(failed)
 
@@ -1143,7 +1152,9 @@ class SessionManagerApp:
                 '归档会把会话从 DSH 的活跃列表隐藏（数据保留在磁盘），'
                 '取消归档则恢复显示。\n确认继续吗？'):
             return
-        self._warn_dsh_running(action_desc)
+        if not self._warn_cache_action(action_desc):
+            self.status_var.set('已取消。')
+            return
         failed = False
         if to_archive:
             if not set_archived([t['session_id'] for t in to_archive], True):
@@ -1171,15 +1182,14 @@ class SessionManagerApp:
                 f'将把 {len(targets)} 个“超过 1 小时”的历史会话移入回收站。\n\n确认继续吗？',
                 danger=True):
             return
-        self._warn_dsh_running('删除历史会话')
         moved, removed_ws, failed = perform_delete_old_sessions(self.workspaces)
         self.refresh()
-        self.status_var.set(f'已把 {len(moved)} 个历史会话移入回收站')
+        self.status_var.set(f'已把 {len(moved)} 个历史会话移入回收站' + self._note_cache_residue())
         if failed:
             self._show_failed(failed)
 
     def _clean_residue(self):
-        if not self._warn_dsh_running('清理缓存残留'):
+        if not self._warn_cache_action('清理缓存残留'):
             self.status_var.set('已取消清理。')
             return
         result = perform_clean_residue()
