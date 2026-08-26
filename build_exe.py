@@ -24,6 +24,18 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# Windows CI runner 默认 cp1252 编码，强制 UTF-8 输出避免中文日志报错
+if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+    try:
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 IS_WINDOWS = os.name == 'nt'
 IS_MACOS = sys.platform == 'darwin'
 

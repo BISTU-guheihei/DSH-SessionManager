@@ -23,6 +23,7 @@ jobs:
     runs-on: windows-latest
     env:
       DSH_BUILD_NO_VENV: '1'   # CI 已装好依赖，跳过 build_exe.py 的 venv 重跑
+      PYTHONUTF8: '1'          # 强制 UTF-8，避免中文日志在 cp1252 下报错
     steps:
       - uses: actions/checkout@v4
 
@@ -50,6 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DSH_BUILD_NO_VENV: '1'
+      PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@v4
 
