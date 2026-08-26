@@ -1,0 +1,72 @@
+# =====================================================================
+# DSH 会话管理器 —— 双平台自动打包
+#
+# 触发：push 标签 v*（如 v1.1.0）时，在 Windows 与 Ubuntu 上分别打包：
+#   - Windows: dist/DSH_SessionManager.exe
+#   - Linux:   dist/DSH_SessionManager （ELF 可执行文件，无 .exe 后缀）
+#
+# 产物作为 GitHub Actions Artifact 上传，可在 workflow 运行页下载，
+# 也可结合 Release 手动上传发布。
+# =====================================================================
+
+name: build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:      # 支持手动触发
+
+jobs:
+  build-windows:
+    name: Build Windows exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pillow
+
+      - name: Build exe
+        run: python build_exe.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DSH_SessionManager-windows
+          path: dist/DSH_SessionManager.exe
+
+  build-linux:
+    name: Build Linux binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system deps (tkinter)
+        run: sudo apt-get update && sudo apt-get install -y python3-tk
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pillow
+
+      - name: Build binary
+        run: python build_exe.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DSH_SessionManager-linux
+          path: dist/DSH_SessionManager
