@@ -511,6 +511,7 @@ class SessionManagerApp:
         self.root.bind('<Configure>', self._on_resize)
         self.refresh()
         self._refresh_dsh_status()
+        self._auto_refresh_loop()
 
     # ------------------------------------------------------------------
     # UI 构建
@@ -712,6 +713,15 @@ class SessionManagerApp:
             fg=SUCCESS if running else TEXT_SUB)
         self.root.after(8000, self._refresh_dsh_status)
 
+    def _auto_refresh_loop(self):
+        '''后台自动刷新：每 3 秒静默刷新一次列表（保留选择、不打断操作），
+        让 DSH 运行中产生的新会话 / 删除变化实时反映到界面。'''
+        try:
+            self.refresh(silent=True)
+        except Exception:
+            pass
+        self.root.after(3000, self._auto_refresh_loop)
+
     # ------------------------------------------------------------------
     # 视图与刷新
     # ------------------------------------------------------------------
@@ -762,7 +772,20 @@ class SessionManagerApp:
             self._sync_view_buttons()
             self.refresh()
 
-    def refresh(self):
+    def refresh(self, silent=False):
+        '''刷新列表。silent=True 用于后台自动刷新：保留选择、不打断用户操作。'''
+        # 记录当前选中（按会话 ID / 回收站条目），刷新后恢复
+        selected_ids = set()
+        for iid in self.tree.selection():
+            item = self.item_data.get(iid)
+            if item:
+                if item['kind'] == 'session':
+                    selected_ids.add(('s', item['data']['session_id']))
+                elif item['kind'] == 'trash':
+                    selected_ids.add(('t', item['data']['session_id']))
+                elif item['kind'] == 'workspace':
+                    selected_ids.add(('w', item['data']['name']))
+
         if self.view == 'sessions':
             self.workspaces = get_workspaces()
             self._populate_sessions()
@@ -770,6 +793,68 @@ class SessionManagerApp:
         else:
             self.trash_items = list_trash_items()
             self._populate_trash()
+
+        # 恢复选择
+        if selected_ids:
+            for iid, item in self.item_data.items():
+                key = None
+                if item['kind'] == 'session':
+                    key = ('s', item['data']['session_id'])
+                elif item['kind'] == 'trash':
+                    key = ('t', item['data']['session_id'])
+                elif item['kind'] == 'workspace':
+                    key = ('w', item['data']['name'])
+                if key in selected_ids:
+                    self.tree.selection_add(iid)
+            if self.tree.selection():
+                self._on_select(None)
+
+        self._update_status_line()
+
+    def _update_status_line(self, force=False):
+        '''状态栏：会话统计 + 孤儿缓存提示 + DSH 提示。
+
+        force=False 且存在 pending 操作提示时不覆盖（保留操作结果文字）；
+        孤儿计数变化时会强制更新。'''
+        now = self._status_line_text()
+        if not force and getattr(self, '_status_pending', None):
+            # 有操作结果要展示，跳过本次更新
+            if now != getattr(self, '_last_status', ''):
+                pass
+            else:
+                return
+        self._last_status = now
+        self.status_var.set(now)
+
+    def _status_line_text(self):
+        total_sessions = sum(ws['session_count'] for ws in self.workspaces)
+        base = f'工作区 {len(self.workspaces)} 个 · 会话 {total_sessions} 个'
+        if self.view == 'sessions':
+            base += f' · 数据目录 {DSH_HOME}'
+        else:
+            base += f' · 回收站 {len(self.trash_items)} 条'
+        # 孤儿缓存实时计数
+        try:
+            from session_core import count_projcache_orphans
+            orphans = count_projcache_orphans()
+            if orphans:
+                base += f' · [发现 {len(orphans)} 条孤儿缓存，可清理]'
+        except Exception:
+            pass
+        return base
+
+    def _set_status(self, text):
+        '''操作结果提示：设 pending，3 秒后自动回到实时状态栏。'''
+        self._status_pending = text
+        self.status_var.set(text)
+
+        def _restore():
+            self._status_pending = None
+            self._update_status_line(force=True)
+        try:
+            self.root.after(3000, _restore)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # 树填充
@@ -800,8 +885,6 @@ class SessionManagerApp:
                 self.item_data[s_iid] = {'kind': 'session', 'data': s}
                 total += 1
         self.count_var.set(f'共 {total} 个会话')
-        self.status_var.set(
-            f'工作区 {len(self.workspaces)} 个 · 会话 {total} 个 · 数据目录 {DSH_HOME}')
         if self.tree.selection():
             self._on_select(None)
 
@@ -820,8 +903,6 @@ class SessionManagerApp:
                 tags=('trash_item',))
             self.item_data[iid] = {'kind': 'trash', 'data': it}
         self.count_var.set(f'回收站 {shown} 条')
-        total_size = sum(it['size'] for it in self.trash_items)
-        self.status_var.set(f'回收站共 {len(self.trash_items)} 条 · 占用 {format_size(total_size)} · {TRASH_DIR}')
         if self.tree.selection():
             self._on_select(None)
 
@@ -1088,7 +1169,7 @@ class SessionManagerApp:
             return
         moved, removed_ws, failed = perform_delete_sessions(targets)
         self.refresh()
-        self.status_var.set(
+        self._set_status(
             f'已把 {len(moved)} 个会话移入回收站 · 自动清理 {len(removed_ws)} 个空工作区'
             + self._note_cache_residue())
         if failed:
@@ -1131,7 +1212,7 @@ class SessionManagerApp:
             return
         removed_ws, failed = perform_delete_workspaces(targets)
         self.refresh()
-        self.status_var.set(
+        self._set_status(
             f'已删除 {len(removed_ws)} 个工作区（会话已入回收站）' + self._note_cache_residue())
         if failed:
             self._show_failed(failed)
@@ -1148,7 +1229,7 @@ class SessionManagerApp:
             return
         purged, failed = purge_trash_items(targets)
         self.refresh()
-        self.status_var.set(f'已彻底删除 {len(purged)} 个条目' + self._note_cache_residue())
+        self._set_status(f'已彻底删除 {len(purged)} 个条目' + self._note_cache_residue())
         if failed:
             self._show_failed(failed)
 
@@ -1164,7 +1245,7 @@ class SessionManagerApp:
             return
         purged, failed = purge_trash_items(items)
         self.refresh()
-        self.status_var.set(f'回收站已清空（{len(purged)} 条）' + self._note_cache_residue())
+        self._set_status(f'回收站已清空（{len(purged)} 条）' + self._note_cache_residue())
         if failed:
             self._show_failed(failed)
 
@@ -1175,7 +1256,7 @@ class SessionManagerApp:
             return
         restored, failed = restore_trash_items(targets)
         self.refresh()
-        self.status_var.set(f'已恢复 {len(restored)} 个会话到原工作区' + self._note_cache_residue())
+        self._set_status(f'已恢复 {len(restored)} 个会话到原工作区' + self._note_cache_residue())
         if failed:
             self._show_failed(failed)
 
@@ -1200,7 +1281,7 @@ class SessionManagerApp:
                 '取消归档则恢复显示。\n确认继续吗？'):
             return
         if not self._warn_cache_action(action_desc):
-            self.status_var.set('已取消。')
+            self._set_status('已取消。')
             return
         failed = False
         if to_archive:
@@ -1213,7 +1294,7 @@ class SessionManagerApp:
             DarkDialog.warn(self.root, '失败', '写入 workspace.json 失败。')
             return
         self.refresh()
-        self.status_var.set(f'已完成：{action_desc}')
+        self._set_status(f'已完成：{action_desc}')
         self._update_archive_button()
 
     def _delete_old(self):
@@ -1231,13 +1312,13 @@ class SessionManagerApp:
             return
         moved, removed_ws, failed = perform_delete_old_sessions(self.workspaces)
         self.refresh()
-        self.status_var.set(f'已把 {len(moved)} 个历史会话移入回收站' + self._note_cache_residue())
+        self._set_status(f'已把 {len(moved)} 个历史会话移入回收站' + self._note_cache_residue())
         if failed:
             self._show_failed(failed)
 
     def _clean_residue(self):
         if not self._warn_cache_action('清理缓存残留'):
-            self.status_var.set('已取消清理。')
+            self._set_status('已取消清理。')
             return
         result = perform_clean_residue()
         self.refresh()
@@ -1259,7 +1340,7 @@ class SessionManagerApp:
             lines.append('')
             lines.append('✓ 复查通过：缓存与磁盘一致')
         DarkDialog.info(self.root, '清理完成', '\n'.join(lines))
-        self.status_var.set('清理完成')
+        self._set_status('清理完成')
 
     def _show_failed(self, failed):
         lines = []
