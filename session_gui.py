@@ -670,9 +670,12 @@ class SessionManagerApp:
                                       width=120, height=38)
         self.btn_delold.grid(row=1, column=1, padx=(5, 0), pady=3, sticky='ew')
 
+        self.btn_delws = HoverButton(grid, '删除选中工作区', self._delete_selected_workspace,
+                                     danger=True, width=120, height=38)
+        self.btn_delws.grid(row=2, column=0, padx=(0, 5), pady=3, sticky='ew')
         self.btn_clean = HoverButton(grid, '清理缓存残留', self._clean_residue,
                                      width=120, height=38)
-        self.btn_clean.grid(row=2, column=0, padx=(0, 5), pady=3, sticky='ew')
+        self.btn_clean.grid(row=2, column=1, padx=(5, 0), pady=3, sticky='ew')
 
         self.btn_restore = HoverButton(grid, '恢复选中', self._restore_selected,
                                        primary=True, width=120, height=38)
@@ -723,6 +726,7 @@ class SessionManagerApp:
             self.btn_archive.grid()
             self.btn_delete.grid()
             self.btn_delold.grid()
+            self.btn_delws.grid()
             self.btn_clean.grid()
         else:
             self._set_tab_style(self.btn_view_trash, True)
@@ -731,6 +735,7 @@ class SessionManagerApp:
             self.btn_archive.grid_remove()
             self.btn_delete.grid_remove()
             self.btn_delold.grid_remove()
+            self.btn_delws.grid_remove()
             self.btn_clean.grid_remove()
             self.btn_restore.grid()
             self.btn_purge.grid()
@@ -1086,6 +1091,48 @@ class SessionManagerApp:
         self.status_var.set(
             f'已把 {len(moved)} 个会话移入回收站 · 自动清理 {len(removed_ws)} 个空工作区'
             + self._note_cache_residue())
+        if failed:
+            self._show_failed(failed)
+
+    def _selected_workspaces(self):
+        '''收集选中的工作区（含其全部会话），受保护工作区单独列出。'''
+        targets, blocked = [], []
+        for iid in self.tree.selection():
+            item = self.item_data.get(iid)
+            if not item or item['kind'] != 'workspace':
+                continue
+            ws = item['data']
+            if ws.get('is_current'):
+                blocked.append(ws)
+            else:
+                targets.append(ws)
+        return targets, blocked
+
+    def _delete_selected_workspace(self):
+        targets, blocked = self._selected_workspaces()
+        if blocked:
+            DarkDialog.warn(
+                self.root, '工作区受保护',
+                '以下工作区包含当前会话，不能删除：\n\n' +
+                '\n'.join('  • ' + b['name'] for b in blocked))
+        if not targets:
+            DarkDialog.info(self.root, '提示', '请先在左侧选择要删除的工作区。')
+            return
+        names = '\n'.join('  • ' + w['name'] + f'  ({w["session_count"]} 个会话)'
+                          for w in targets[:8])
+        if len(targets) > 8:
+            names += f'\n  … 还有 {len(targets) - 8} 个'
+        total = sum(w['session_count'] for w in targets)
+        if not DarkDialog.confirm(
+                self.root, '删除工作区',
+                f'将把 {len(targets)} 个工作区（共 {total} 个会话）移入回收站。\n\n'
+                f'{names}\n\n移入后工作区条目自动清理，会话可在回收站恢复。确认继续吗？',
+                danger=True):
+            return
+        removed_ws, failed = perform_delete_workspaces(targets)
+        self.refresh()
+        self.status_var.set(
+            f'已删除 {len(removed_ws)} 个工作区（会话已入回收站）' + self._note_cache_residue())
         if failed:
             self._show_failed(failed)
 
