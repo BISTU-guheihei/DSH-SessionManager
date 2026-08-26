@@ -21,6 +21,8 @@ jobs:
   build-windows:
     name: Build Windows exe
     runs-on: windows-latest
+    env:
+      DSH_BUILD_NO_VENV: '1'   # CI 已装好依赖，跳过 build_exe.py 的 venv 重跑
     steps:
       - uses: actions/checkout@v4
 
@@ -46,6 +48,8 @@ jobs:
   build-linux:
     name: Build Linux binary
     runs-on: ubuntu-latest
+    env:
+      DSH_BUILD_NO_VENV: '1'
     steps:
       - uses: actions/checkout@v4
 

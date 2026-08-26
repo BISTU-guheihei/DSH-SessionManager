@@ -70,7 +70,13 @@ def ensure_venv() -> Path:
 
 
 def re_run_in_venv():
-    '''如果不是 .venv 里的 python 运行本脚本，自动切过去重新执行。'''
+    '''如果不是 .venv 里的 python 运行本脚本，自动切过去重新执行。
+
+    若设置了环境变量 DSH_BUILD_NO_VENV=1（CI 环境已装好依赖），
+    则跳过虚拟环境切换，直接用当前 Python 构建。
+    '''
+    if os.environ.get('DSH_BUILD_NO_VENV') == '1':
+        return
     venv_python = ensure_venv()
     current_python = Path(sys.executable).resolve()
     if current_python == venv_python.resolve():
