@@ -16,7 +16,7 @@ import os
 import sys
 import tkinter as tk
 import tkinter.font as tkfont
-from tkinter import ttk, messagebox
+from tkinter import ttk
 
 from session_core import (
     get_workspaces, list_trash_items, perform_delete_sessions,
@@ -93,10 +93,12 @@ def _lerp(c1, c2, t):
 
 
 # ----------------------------------------------------------------------
-# 高级按钮：深灰渐变底 + hover 提亮上浮
+# 高级按钮：渐变底 + 投影 + hover 上浮 + 高光边
 # ----------------------------------------------------------------------
 class HoverButton(tk.Canvas):
-    '''自绘圆角按钮：垂直渐变底，hover 平滑提亮，主按钮蓝色渐变。'''
+    '''自绘圆角按钮：垂直渐变、底部投影、hover 上浮、顶部高光边、按下下沉。'''
+
+    SHADOW = 4   # 底部投影高度（canvas 比按钮高这么多）
 
     def __init__(self, master, text, command=None, *, width=150, height=40,
                  radius=8, font_size=10, bold=False, danger=False, primary=False,
@@ -109,8 +111,9 @@ class HoverButton(tk.Canvas):
         self._disabled = disabled
         self._text = text
         self._anim = None
-        self._t = 0.0
-        super().__init__(master, width=width, height=height,
+        self._t = 0.0      # 0=normal 1=hover
+        self._pressed = False
+        super().__init__(master, width=width, height=height + self.SHADOW,
                          highlightthickness=0, bd=0, bg=master['bg'],
                          cursor='hand2' if not disabled else 'arrow')
         self._font = _font(font_size, bold)
@@ -124,21 +127,23 @@ class HoverButton(tk.Canvas):
             self.configure(cursor='arrow')
 
     def _palette(self):
-        '''返回 (top, bottom, fg, border, hover_top, hover_bottom)。'''
+        '''返回 (top, bottom, fg, border, glow, hover_top, hover_bottom, hover_glow)。'''
         if self._disabled:
-            return '#23262E', '#23262E', DISABLED_FG, '#2C313C', None, None
+            return '#23262E', '#23262E', DISABLED_FG, '#2C313C', '#1A1C22', None, None, None
         if self._style == 'primary':
-            return PRIMARY, PRIMARY_DARK, '#FFFFFF', PRIMARY_DARK, '#6E8BFF', '#4E6CE8'
+            return PRIMARY, PRIMARY_DARK, '#FFFFFF', '#3E58C8', '#7E9BFF', '#6E8BFF', '#4E6CE8', '#A5BCFF'
         if self._style == 'danger':
-            return '#3A262B', '#2E1E22', DANGER, '#5A3439', '#4A2E33', '#382428'
-        return CARD_2, '#1A1D24', TEXT, BORDER, '#2E3440', '#252A34'
+            return '#3A262B', '#2E1E22', DANGER, '#5A3439', '#241519', '#4A2E33', '#382428', '#7A4A4E'
+        return CARD_2, '#1A1D24', TEXT, '#39404D', '#101319', '#2E3440', '#252A34', '#4E5870'
 
     def _current(self, field):
-        top, bottom, fg, border, htop, hbot = self._palette()
-        if self._disabled:
-            return {'top': top, 'bottom': bottom, 'fg': fg, 'border': border}.get(field)
-        a = {'top': top, 'bottom': bottom, 'border': border}
-        b = {'top': htop, 'bottom': hbot, 'border': '#3A4150'}
+        pal = self._palette()
+        top, bottom, fg, border, glow, htop, hbot, hglow = pal
+        if self._disabled or htop is None:
+            return {'top': top, 'bottom': bottom, 'fg': fg,
+                    'border': border, 'glow': glow}.get(field)
+        a = {'top': top, 'bottom': bottom, 'border': border, 'glow': glow}
+        b = {'top': htop, 'bottom': hbot, 'border': '#4A5570', 'glow': hglow}
         return _rgb_to_hex(_lerp(_hex_to_rgb(a[field]), _hex_to_rgb(b[field]), self._t))
 
     def _draw(self):
@@ -147,46 +152,61 @@ class HoverButton(tk.Canvas):
         top = self._current('top')
         bottom = self._current('bottom')
         border = self._current('border')
-        # 渐变底：分 20 段横条
-        steps = 20
-        for i in range(steps):
-            t = i / (steps - 1)
-            color = _rgb_to_hex(_lerp(_hex_to_rgb(top), _hex_to_rgb(bottom), t))
-            y0 = i * h / steps
-            y1 = (i + 1) * h / steps + 1
-            self._round_rect(0, y0, w, y1, r if i == 0 else 0, fill=color, outline='')
-            # 简单圆角：仅第一段和最后一段做圆角
-            if i > 0:
-                self.create_rectangle(0, y0, w, y1, fill=color, outline='')
-        # 重新画整体轮廓圆角（先清后画一次圆角矩形边框）
-        self.delete('all')
-        self._round_rect(0, 0, w, h, r, fill='', outline=border)
-        # 渐变主体
-        for i in range(steps):
-            t = i / (steps - 1)
-            color = _rgb_to_hex(_lerp(_hex_to_rgb(top), _hex_to_rgb(bottom), t))
-            y0 = i * h / steps
-            y1 = (i + 1) * h / steps + 1
-            clip = self._clip_rect_for_band(i, steps, w, h, r)
-            if clip:
-                x0, y0c, x1, y1c = clip
-                self.create_rectangle(x0, y0c, x1, y1c, fill=color, outline='')
-        # 边框
-        self._round_rect(1, 1, w - 1, h - 1, r, fill='', outline=border)
-        fg = self._palette()[2] if not self._disabled else DISABLED_FG
-        self.create_text(w / 2, h / 2 + 1, text=self._text, fill=fg, font=self._font)
+        glow = self._current('glow')
 
-    def _clip_rect_for_band(self, i, steps, w, h, r):
-        y0 = i * h / steps
-        y1 = (i + 1) * h / steps + 1
+        # 按钮主体的垂直偏移：normal 0 / hover 上浮 2px / 按下下沉 1px
+        if self._disabled:
+            lift = 0
+        elif self._pressed:
+            lift = self.SHADOW - 1
+        else:
+            lift = int(self.SHADOW * (1 - self._t) - 1)
+
+        # 底部投影（随 hover 加深、变小 = 上浮感）
+        shadow_alpha = 0.35 + 0.25 * (1 - self._t)
+        shadow_color = _rgb_to_hex(tuple(
+            int(c * shadow_alpha) for c in _hex_to_rgb('#000000')))
+        self._round_rect(2, self.SHADOW, w - 2, h + self.SHADOW, r,
+                         fill=shadow_color, outline='')
+
+        # 主体渐变
+        steps = 22
+        for i in range(steps):
+            t = i / (steps - 1)
+            color = _rgb_to_hex(_lerp(_hex_to_rgb(top), _hex_to_rgb(bottom), t))
+            y0 = lift + i * h / steps
+            y1 = lift + (i + 1) * h / steps + 1
+            self._clip_band(i, steps, w, lift, h, r, y0, y1, color)
+
+        # 顶部高光边（1.5px 亮线）
+        if not self._disabled:
+            self._round_rect(2, lift + 1, w - 2, lift + 3, r - 1,
+                             fill='', outline=glow)
+
+        # 边框
+        self._round_rect(0, lift, w, lift + h, r, fill='', outline=border)
+
+        fg = self._palette()[2] if not self._disabled else DISABLED_FG
+        ty = lift + h / 2 + 1
+        self.create_text(w / 2, ty, text=self._text, fill=fg, font=self._font)
+
+    def _clip_band(self, i, steps, w, lift, h, r, y0, y1, color):
+        '''画一条渐变带，顶部/底部圆角处缩进。'''
         x0, x1 = 0.0, float(w)
-        if y0 < r and y1 > r:
-            return None  # 顶部圆角带，跳过矩形直接画
+        top_band = y0 < lift + r and y1 > lift + r
+        bot_band = y0 < lift + h - r and y1 > lift + h - r
         if i == 0:
             x0 = r
         if i == steps - 1:
             x1 = w - r
-        return x0, y0, x1, y1
+        if top_band or bot_band:
+            return
+        self.create_rectangle(x0, y0, x1, y1, fill=color, outline='')
+        # 圆角段单独画
+        if i == 0:
+            self._round_rect(0, lift, w, lift + r * 2, r, fill=color, outline='')
+        if i == steps - 1:
+            self._round_rect(0, lift + h - r * 2, w, lift + h, r, fill=color, outline='')
 
     def _round_rect(self, x1, y1, x2, y2, r, **kw):
         pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
@@ -218,15 +238,145 @@ class HoverButton(tk.Canvas):
         self._animate_to(1.0)
 
     def _on_leave(self, _e):
+        self._pressed = False
         self._animate_to(0.0)
 
     def _on_press(self, _e):
-        self._t = 1.0
+        self._pressed = True
         self._draw()
 
     def _on_release(self, _e):
-        if self._command:
+        was_pressed = self._pressed
+        self._pressed = False
+        self._draw()
+        if was_pressed and self._command:
             self._command()
+
+
+# ----------------------------------------------------------------------
+# 深色对话框（替代白色系统 messagebox）
+# ----------------------------------------------------------------------
+class DarkDialog(tk.Toplevel):
+    '''深色主题模态对话框：标题 + 消息 + 按钮，居中于父窗口。'''
+
+    def __init__(self, parent, title, message, *, buttons=None, icon=None,
+                 danger_title=False):
+        super().__init__(parent)
+        self.withdraw()
+        self.title(title)
+        self.configure(bg=CARD)
+        self.resizable(False, False)
+        self.transient(parent)
+        self._result = None
+        self._buttons = {}
+
+        outer = tk.Frame(self, bg=CARD)
+        outer.pack(fill='both', expand=True, padx=1, pady=1)
+        tk.Frame(outer, bg=BORDER).pack(fill='both', expand=True, padx=0, pady=0)
+        inner = tk.Frame(outer, bg=CARD, padx=22, pady=16)
+        inner.pack(fill='both', expand=True, padx=1, pady=1)
+
+        # 标题行：图标 + 标题文字
+        head = tk.Frame(inner, bg=CARD)
+        head.pack(fill='x')
+        if icon:
+            tk.Label(head, text=icon, font=_font(14), bg=CARD,
+                     fg=DANGER if danger_title else PRIMARY).pack(side='left', padx=(0, 8))
+        tk.Label(head, text=title, font=_font(12, bold=True), bg=CARD,
+                 fg=DANGER if danger_title else TEXT,
+                 anchor='w', justify='left', wraplength=430).pack(side='left', fill='x')
+
+        # 消息区（自动换行）
+        msg_frame = tk.Frame(inner, bg=CARD)
+        msg_frame.pack(fill='x', pady=(10, 6))
+        tk.Label(msg_frame, text=message, font=_font(10), bg=CARD, fg=TEXT_SUB,
+                 anchor='w', justify='left', wraplength=430).pack(fill='x')
+
+        # 按钮行
+        btn_row = tk.Frame(inner, bg=CARD)
+        btn_row.pack(fill='x', pady=(10, 0))
+        if not buttons:
+            buttons = [('确定', 'ok', 'primary')]
+        # 右对齐排列
+        btn_row.columnconfigure(0, weight=1)
+        col = 1
+        for text, value, style in buttons:
+            if style == 'primary':
+                btn = HoverButton(btn_row, text, None, primary=True,
+                                  width=92, height=34, radius=7, font_size=10)
+            elif style == 'danger':
+                btn = HoverButton(btn_row, text, None, danger=True,
+                                  width=92, height=34, radius=7, font_size=10)
+            else:
+                btn = HoverButton(btn_row, text, None,
+                                  width=92, height=34, radius=7, font_size=10)
+            btn.grid(row=0, column=col, padx=(8, 0))
+            self._buttons[btn] = value
+            # 重新绑定：点击后记录结果并关闭
+            for ev in ('<Enter>', '<Leave>', '<ButtonPress-1>', '<ButtonRelease-1>'):
+                btn.unbind(ev)
+            btn._command = lambda v=value: self._close(v)
+            btn.bind('<Enter>', btn._on_enter)
+            btn.bind('<Leave>', btn._on_leave)
+            btn.bind('<ButtonPress-1>', btn._on_press)
+            btn.bind('<ButtonRelease-1>', lambda e, v=value: self._close(v))
+            col += 1
+
+        # 快捷键：Enter=第一个按钮，Esc=取消（最后一个普通按钮或 None）
+        self.bind('<Return>', lambda e: self._close(buttons[0][1]))
+        self.bind('<Escape>', lambda e: self._close(None))
+        self.protocol('WM_DELETE_WINDOW', lambda: self._close(None))
+
+        self.update_idletasks()
+        self._center(parent)
+        self.grab_set()
+        self.focus_set()
+        if self._buttons:
+            first_btn = next(iter(self._buttons))
+            first_btn.focus_set()
+
+    def _center(self, parent):
+        pw, ph = parent.winfo_width(), parent.winfo_height()
+        px, py = parent.winfo_rootx(), parent.winfo_rooty()
+        w, h = self.winfo_width(), self.winfo_height()
+        x = px + (pw - w) // 2
+        y = py + (ph - h) // 2 - 30
+        self.geometry(f'+{max(x, 0)}+{max(y, 0)}')
+
+    def _close(self, value):
+        self._result = value
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        self.destroy()
+
+    def show(self):
+        '''显示并等待用户选择，返回按钮值（取消/关闭返回 None）。'''
+        self.deiconify()
+        self.wait_window()
+        return self._result
+
+    # ---- 便捷工厂 ----
+    @classmethod
+    def confirm(cls, parent, title, message, yes_text='确定', no_text='取消',
+                danger=False):
+        dlg = cls(parent, title, message,
+                  buttons=[(no_text, False, 'normal'), (yes_text, True, 'primary')],
+                  icon='⚠' if danger else '❓', danger_title=danger)
+        return dlg.show()
+
+    @classmethod
+    def info(cls, parent, title, message):
+        dlg = cls(parent, title, message,
+                  buttons=[('确定', True, 'primary')], icon='ℹ')
+        return dlg.show()
+
+    @classmethod
+    def warn(cls, parent, title, message):
+        dlg = cls(parent, title, message,
+                  buttons=[('确定', True, 'primary')], icon='⚠', danger_title=True)
+        return dlg.show()
 
 
 # ----------------------------------------------------------------------
@@ -320,7 +470,8 @@ class SessionManagerApp:
         self.root = root
         self.root.title('DSH 会话管理器')
         self.root.geometry('1240x780')
-        self.root.minsize(1020, 640)
+        # 最小窗口：保证详情面板(标题+3行按钮+统计内容)和树均不被压缩遮挡
+        self.root.minsize(1060, 700)
         self.root.configure(bg=BG)
 
         self.workspaces = []
@@ -710,7 +861,7 @@ class SessionManagerApp:
 
         w = max(self.detail.winfo_width(), 220)
         pad = 6
-        y = 4
+        y = 16   # 顶部留足空间：create_text 的 y 是文字中心，需给半行高
 
         if data is None:
             logo_file = _asset(os.path.join('assets', 'logo.png'))
@@ -718,16 +869,16 @@ class SessionManagerApp:
                 try:
                     img = tk.PhotoImage(file=logo_file)
                     self._images.append(img)
-                    self.detail.create_image(w / 2, 80, image=img)
-                    y = 156
+                    self.detail.create_image(w / 2, 92, image=img)
+                    y = 170
                 except Exception:
-                    y = 52
+                    y = 70
             self.detail.create_text(w / 2, y, text='选一个会话看看吧',
                                     font=_font(11, bold=True), fill=TEXT_SUB)
-            self.detail.create_text(w / 2, y + 24,
+            self.detail.create_text(w / 2, y + 26,
                                     text='这里会显示会话的统计信息\n（轮数、耗时、Token 用量、上下文压力）',
                                     font=_font(9), fill='#6B7280', justify='center')
-            self.detail.configure(scrollregion=(0, 0, w, max(self.detail.winfo_height(), 200)))
+            self.detail.configure(scrollregion=(0, 0, w, max(self.detail.winfo_height(), 220)))
             return
 
         if kind == 'session':
@@ -736,6 +887,7 @@ class SessionManagerApp:
             content_h = self._draw_trash_detail(self.detail, data, w, pad, y)
         # 直接绘制 + scrollregion：内容完整可滚动，不会被裁剪
         self.detail.configure(scrollregion=(0, 0, w, max(content_h + 10, self.detail.winfo_height())))
+        self.detail.yview_moveto(0)
         self.detail.bind('<MouseWheel>', self._on_detail_wheel)
 
     def _on_detail_wheel(self, e):
@@ -870,30 +1022,29 @@ class SessionManagerApp:
     def _warn_dsh_running(self, action_name):
         if not detect_dsh_running():
             return True
-        return messagebox.askyesno(
-            'DSH 正在运行',
+        return DarkDialog.confirm(
+            self.root, 'DSH 正在运行',
             f'检测到 DSH Desktop 正在运行。\n\n{action_name} 对缓存的修改可能被 DSH 写回覆盖'
             f'（会话文件本身不受影响）。\n\n建议先完全退出 DSH 再操作。\n\n仍要继续吗？',
-            icon='warning', parent=self.root)
+            yes_text='仍要继续', no_text='取消', danger=True)
 
     def _delete_selected(self):
         targets, blocked = self._selected_items('session')
         if blocked:
-            messagebox.showwarning(
-                '当前会话受保护',
+            DarkDialog.warn(
+                self.root, '当前会话受保护',
                 '以下会话正在进行中，不能删除：\n\n' +
-                '\n'.join('  • ' + (b.get('title') or b['session_id']) for b in blocked),
-                parent=self.root)
+                '\n'.join('  • ' + (b.get('title') or b['session_id']) for b in blocked))
         if not targets:
-            messagebox.showinfo('提示', '请先选择要删除的会话。', parent=self.root)
+            DarkDialog.info(self.root, '提示', '请先选择要删除的会话。')
             return
         names = '\n'.join('  • ' + (t.get('title') or '(无标题)') for t in targets[:8])
         if len(targets) > 8:
             names += f'\n  … 还有 {len(targets) - 8} 个'
-        if not messagebox.askyesno(
-                '移入回收站',
-                f'将把 {len(targets)} 个会话移入回收站（可恢复）：\n\n{names}\n\n'
-                '确认继续吗？', icon='question', parent=self.root):
+        if not DarkDialog.confirm(
+                self.root, '移入回收站',
+                f'将把 {len(targets)} 个会话移入回收站（可恢复）：\n\n{names}\n\n确认继续吗？',
+                danger=True):
             return
         self._warn_dsh_running('删除会话')
         moved, removed_ws, failed = perform_delete_sessions(targets)
@@ -906,12 +1057,12 @@ class SessionManagerApp:
     def _purge_selected(self):
         targets, blocked = self._selected_items('trash')
         if not targets:
-            messagebox.showinfo('提示', '请先在回收站视图中选择要彻底删除的条目。', parent=self.root)
+            DarkDialog.info(self.root, '提示', '请先在回收站视图中选择要彻底删除的条目。')
             return
-        if not messagebox.askyesno(
-                '彻底删除',
+        if not DarkDialog.confirm(
+                self.root, '彻底删除',
                 f'将彻底删除 {len(targets)} 个回收站条目，不可恢复！\n\n确认继续吗？',
-                icon='warning', parent=self.root):
+                yes_text='彻底删除', danger=True):
             return
         purged, failed = purge_trash_items(targets)
         self.refresh()
@@ -922,12 +1073,12 @@ class SessionManagerApp:
     def _empty_trash(self):
         items = self.trash_items
         if not items:
-            messagebox.showinfo('提示', '回收站是空的。', parent=self.root)
+            DarkDialog.info(self.root, '提示', '回收站是空的。')
             return
-        if not messagebox.askyesno(
-                '清空回收站',
+        if not DarkDialog.confirm(
+                self.root, '清空回收站',
                 f'将彻底删除回收站全部 {len(items)} 个条目，不可恢复！\n\n确认继续吗？',
-                icon='warning', parent=self.root):
+                yes_text='清空', danger=True):
             return
         purged, failed = purge_trash_items(items)
         self.refresh()
@@ -938,7 +1089,7 @@ class SessionManagerApp:
     def _restore_selected(self):
         targets, _ = self._selected_items('trash')
         if not targets:
-            messagebox.showinfo('提示', '请先选择要恢复的回收站条目。', parent=self.root)
+            DarkDialog.info(self.root, '提示', '请先选择要恢复的回收站条目。')
             return
         restored, failed = restore_trash_items(targets)
         self.refresh()
@@ -949,7 +1100,7 @@ class SessionManagerApp:
     def _archive_selected(self):
         targets, blocked = self._selected_items('session')
         if not targets:
-            messagebox.showinfo('提示', '请先选择要归档 / 取消归档的会话。', parent=self.root)
+            DarkDialog.info(self.root, '提示', '请先选择要归档 / 取消归档的会话。')
             return
         # 分别处理：已归档的取消，未归档的归档（混合选择时各自归位）
         to_archive = [t for t in targets if not t['is_archived']]
@@ -960,12 +1111,11 @@ class SessionManagerApp:
         if to_unarchive:
             parts.append(f'取消归档 {len(to_unarchive)} 个')
         action_desc = '、'.join(parts)
-        if not messagebox.askyesno(
-                '归档操作',
+        if not DarkDialog.confirm(
+                self.root, '归档操作',
                 f'将{action_desc}会话。\n\n'
                 '归档会把会话从 DSH 的活跃列表隐藏（数据保留在磁盘），'
-                '取消归档则恢复显示。\n确认继续吗？',
-                icon='question', parent=self.root):
+                '取消归档则恢复显示。\n确认继续吗？'):
             return
         self._warn_dsh_running(action_desc)
         failed = False
@@ -976,7 +1126,7 @@ class SessionManagerApp:
             if not set_archived([t['session_id'] for t in to_unarchive], False):
                 failed = True
         if failed:
-            messagebox.showerror('失败', '写入 workspace.json 失败。', parent=self.root)
+            DarkDialog.warn(self.root, '失败', '写入 workspace.json 失败。')
             return
         self.refresh()
         self.status_var.set(f'已完成：{action_desc}')
@@ -988,12 +1138,12 @@ class SessionManagerApp:
             if not s['is_current'] and s['age'] > OLD_THRESHOLD_SECONDS
         ]
         if not targets:
-            messagebox.showinfo('提示', '没有可删除的历史会话。', parent=self.root)
+            DarkDialog.info(self.root, '提示', '没有可删除的历史会话。')
             return
-        if not messagebox.askyesno(
-                '删除历史会话',
+        if not DarkDialog.confirm(
+                self.root, '删除历史会话',
                 f'将把 {len(targets)} 个“超过 1 小时”的历史会话移入回收站。\n\n确认继续吗？',
-                icon='question', parent=self.root):
+                danger=True):
             return
         self._warn_dsh_running('删除历史会话')
         moved, removed_ws, failed = perform_delete_old_sessions(self.workspaces)
@@ -1025,7 +1175,7 @@ class SessionManagerApp:
         else:
             lines.append('')
             lines.append('✓ 复查通过：缓存与磁盘一致')
-        messagebox.showinfo('清理完成', '\n'.join(lines), parent=self.root)
+        DarkDialog.info(self.root, '清理完成', '\n'.join(lines))
         self.status_var.set('清理完成')
 
     def _show_failed(self, failed):
@@ -1033,7 +1183,7 @@ class SessionManagerApp:
         for obj, msg in failed:
             name = (obj or {}).get('session_id') if isinstance(obj, dict) else str(obj)
             lines.append('  • ' + name + ': ' + msg)
-        messagebox.showwarning('部分操作未完成', '\n'.join(lines), parent=self.root)
+        DarkDialog.warn(self.root, '部分操作未完成', '\n'.join(lines))
 
 
 # ----------------------------------------------------------------------
