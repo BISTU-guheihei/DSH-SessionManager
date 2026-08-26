@@ -19,18 +19,11 @@ wall = Image.alpha_composite(Image.new('RGBA', wall.size, (255, 255, 255, 255)),
 wall = wall.convert('RGB')
 wall = wall.resize((1600, 900), Image.LANCZOS)
 veil = Image.new('RGB', wall.size, (255, 255, 255))
-wall = Image.blend(wall, veil, 0.12)
+wall = Image.blend(wall, veil, 0.05)
 wall.save(OUT / 'wallpaper.png', optimize=True, format='PNG')
 print('wallpaper.png', wall.size)
 
-# 2. 瓶子：RGB 直转 PNG，等比缩到高 720
-bottle = Image.open(ROOT / 'bizhi' / 'DeepSeek鲸鱼娘瓶子.webp').convert('RGB')
-w, h = bottle.size
-bottle = bottle.resize((int(w * 720 / h), 720), Image.LANCZOS)
-bottle.save(OUT / 'bottle.png', optimize=True)
-print('bottle.png', bottle.size)
-
-# 3. 鲸鱼娘 logo：128px，保留透明
+# 2. 鲸鱼娘 logo：128px，保留透明
 logo = Image.open(ROOT / 'whalegirl' / 'improved-1.png').convert('RGBA')
 logo = logo.resize((128, 128), Image.LANCZOS)
 logo.save(OUT / 'logo.png', optimize=True)
@@ -47,13 +40,6 @@ circ.putalpha(mask)
 circ = circ.resize((96, 96), Image.LANCZOS)
 circ.save(OUT / 'logo_circle.png', optimize=True)
 print('logo_circle.png', circ.size)
-
-# 3c. 瓶子小图（右侧详情面板底部装饰，高 260）
-bottle_small = Image.open(ROOT / 'bizhi' / 'DeepSeek鲸鱼娘瓶子.webp').convert('RGB')
-bw, bh = bottle_small.size
-bottle_small = bottle_small.resize((int(bw * 260 / bh), 260), Image.LANCZOS)
-bottle_small.save(OUT / 'bottle_small.png', optimize=True)
-print('bottle_small.png', bottle_small.size)
 
 # 4. 状态栏小图标 32px
 small = Image.open(ROOT / 'whalegirl' / 'improved-1.png').convert('RGBA')

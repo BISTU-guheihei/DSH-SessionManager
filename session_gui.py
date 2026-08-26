@@ -2,11 +2,12 @@
 '''DSH 会话管理工具 —— 图形界面模块。
 
 DeepSeek 主题 GUI：
-- 壁纸背景（bizhi/wallhaven-qrm1k5，随窗口缩放）
-- 鲸鱼娘圆形头像、瓶子装饰图
-- 圆角卡片、渐变按钮、hover 动画、点击涟漪、进度条动画
+- 壁纸背景（bizhi/wallhaven 壁纸，随窗口缩放，大面积露出）
+- 深蓝渐变顶栏 / 底栏，白色文字
+- 鲸鱼娘圆形头像
+- 圆角卡片、渐变按钮、hover 动画、点击涟漪、进度条动画、呼吸状态灯
 - 会话 / 回收站双视图 + 实时搜索过滤
-- 会话统计详情面板、DSH 运行状态灯
+- 会话统计详情（可滚动）、DSH 运行状态
 
 依赖：tkinter（必需）；Pillow（可选，有则壁纸随窗口平滑缩放）。
 '''
@@ -36,11 +37,15 @@ except Exception:
 # ----------------------------------------------------------------------
 # 主题（DeepSeek 蓝）
 # ----------------------------------------------------------------------
-PRIMARY = '#4D6BFE'          # DeepSeek 官方蓝
+PRIMARY = '#4D6BFE'
 PRIMARY_DARK = '#3B50D6'
 PRIMARY_LIGHT = '#E8EEFF'
 PRIMARY_GHOST = '#F3F6FF'
-BG_FALLBACK = '#838983'      # 壁纸平均色（无 PIL 时背景）
+TOP_GRAD_A = '#2B3F9E'      # 顶栏渐变深蓝
+TOP_GRAD_B = '#4D6BFE'
+BOT_GRAD_A = '#22336F'
+BOT_GRAD_B = '#3B50D6'
+BG_FALLBACK = '#838983'
 CARD = '#FFFFFF'
 TEXT = '#1F2937'
 TEXT_SUB = '#6B7280'
@@ -63,7 +68,6 @@ def _font(size, bold=False):
 
 
 def _asset(rel_path):
-    '''定位随程序打包的资源（assets / whalegirl）。找不到返回 None。'''
     candidates = []
     meipass = getattr(sys, '_MEIPASS', None)
     if meipass:
@@ -91,47 +95,45 @@ def _lerp(c1, c2, t):
     return tuple(a + (b - a) * t for a, b in zip(c1, c2))
 
 
-# ----------------------------------------------------------------------
-# 渐变背景绘制（无 PIL 时的纯色渐变壁纸替代）
-# ----------------------------------------------------------------------
-def draw_gradient(canvas, w, h, top='#7EA6F0', bottom='#EAF1FF'):
-    canvas.delete('gradient')
-    steps = 120
+def draw_vertical_gradient(canvas, x1, y1, x2, y2, top, bottom, tag):
+    '''在 canvas 区域画垂直渐变矩形。'''
+    canvas.delete(tag)
+    steps = 60
     t1 = _hex_to_rgb(top)
     b1 = _hex_to_rgb(bottom)
+    h = y2 - y1
     for i in range(steps):
         t = i / (steps - 1)
         color = _rgb_to_hex(_lerp(t1, b1, t))
-        y0 = i * h / steps
-        y1 = (i + 1) * h / steps + 1
-        canvas.create_rectangle(0, y0, w, y1, fill=color, outline='', tags='gradient')
+        canvas.create_rectangle(x1, y1 + i * h / steps, x2, y1 + (i + 1) * h / steps + 1,
+                                fill=color, outline='', tags=tag)
 
 
 # ----------------------------------------------------------------------
-# 圆角按钮（带 hover 渐变 + 点击涟漪）
+# 圆角按钮（hover 渐变 + 点击涟漪）
 # ----------------------------------------------------------------------
 class HoverButton(tk.Canvas):
-    '''自绘圆角按钮：hover 渐变动画、按下凹陷、点击涟漪。'''
-
     def __init__(self, master, text, command=None, *, color=PRIMARY, text_color='#FFFFFF',
                  width=150, height=42, radius=12, font_size=11, bold=False,
-                 danger=False, ghost=False, disabled=False):
+                 danger=False, ghost=False, disabled=False, bg_color=None):
         self._bw = width
         self._bh = height
         self._br = radius
-        self._base = DANGER if danger else (CARD if ghost else color)
+        self._base = DANGER if danger else ((bg_color or CARD) if ghost else color)
         self._hover = DANGER_DARK if danger else (PRIMARY_GHOST if ghost else PRIMARY_DARK)
         self._press = DANGER_DARK if danger else (PRIMARY if ghost else '#3347B8')
         self._fg = DANGER if danger else (PRIMARY if ghost else text_color)
-        self._fg_hover = '#FFFFFF' if (danger or not ghost) else PRIMARY_DARK
         self._command = command
         self._disabled = disabled
         self._text = text
         self._ripples = []
         self._anim = None
-        self._t = 0.0  # 0=normal 1=hover
+        self._t = 0.0
+        self._bg_color = bg_color
         super().__init__(master, width=width, height=height,
-                         highlightthickness=0, bd=0, cursor='hand2' if not disabled else 'arrow')
+                         highlightthickness=0, bd=0,
+                         bg=bg_color if bg_color else master['bg'],
+                         cursor='hand2' if not disabled else 'arrow')
         self._font = _font(font_size, bold)
         self._draw()
         if not disabled:
@@ -149,15 +151,14 @@ class HoverButton(tk.Canvas):
         self.delete('all')
         w, h, r = self._bw, self._bh, self._br
         fill = self._current_color() if not self._disabled else '#D1D5DB'
-        self._round_rect(0, 0, w, h, r, fill=fill, outline='', tags='bg')
+        self._round_rect(0, 0, w, h, r, fill=fill, outline='')
         fg = self._fg if not self._disabled else '#9CA3AF'
         self.create_text(w / 2, h / 2 + 1, text=self._text, fill=fg,
-                         font=self._font, tags='txt')
-        for rip in self._ripples:
-            x, y, rad, alpha = rip
+                         font=self._font)
+        for x, y, rad, alpha in self._ripples:
             color = _rgb_to_hex(_lerp(_hex_to_rgb(fill), _hex_to_rgb('#FFFFFF'), 0.5))
             self.create_oval(x - rad, y - rad, x + rad, y + rad,
-                             outline=color, width=2, tags='ripple')
+                             outline=color, width=2)
 
     def _round_rect(self, x1, y1, x2, y2, r, **kw):
         pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
@@ -194,7 +195,6 @@ class HoverButton(tk.Canvas):
     def _on_press(self, e):
         self._t = 1.0
         self._draw()
-        # 涟漪：从点击位置扩散
         x, y = e.x, e.y
 
         def ripple(rad=6, alpha=0.6):
@@ -215,12 +215,13 @@ class HoverButton(tk.Canvas):
 
 
 # ----------------------------------------------------------------------
-# 状态灯（DSH 运行状态，带呼吸动画）
+# 状态灯（呼吸动画）
 # ----------------------------------------------------------------------
 class StatusDot(tk.Canvas):
-    def __init__(self, master, size=14):
+    def __init__(self, master, size=14, bg_color=None):
         super().__init__(master, width=size + 8, height=size + 8,
-                         highlightthickness=0, bd=0)
+                         highlightthickness=0, bd=0,
+                         bg=bg_color if bg_color else master['bg'])
         self._size = size
         self._running = False
         self._phase = 0.0
@@ -237,14 +238,13 @@ class StatusDot(tk.Canvas):
         self._phase = (self._phase + 0.12) % 6.28
         if self._running:
             halo = 3 + abs(self._phase) * 0.6
-            color = _rgb_to_hex(_lerp(_hex_to_rgb(SUCCESS), _hex_to_rgb('#86EFAC'), abs(self._phase) / 6.28 * 0.5))
             self.create_oval(cx - halo - s / 2, cy - halo - s / 2,
                              cx + halo + s / 2, cy + halo + s / 2,
                              fill=SUCCESS, outline='', stipple='gray50')
         else:
-            color = '#9CA3AF'
+            color = '#C9CEE0'
         self.create_oval(cx - s / 2, cy - s / 2, cx + s / 2, cy + s / 2,
-                         fill=color, outline='')
+                         fill=SUCCESS if self._running else color, outline='')
         self.after(120, self._tick)
 
 
@@ -252,9 +252,9 @@ class StatusDot(tk.Canvas):
 # 上下文压力进度条（动画填充）
 # ----------------------------------------------------------------------
 class PressureBar(tk.Canvas):
-    def __init__(self, master, width=240, height=12):
+    def __init__(self, master, width=240, height=12, bg_color=CARD):
         super().__init__(master, width=width, height=height,
-                         highlightthickness=0, bd=0)
+                         highlightthickness=0, bd=0, bg=bg_color)
         self._bw, self._bh = width, height
         self._target = 0.0
         self._cur = 0.0
@@ -280,11 +280,9 @@ class PressureBar(tk.Canvas):
         self.delete('all')
         w, h = self._bw, self._bh
         r = h / 2
-        # 轨道
         self.create_oval(0, 0, h, h, fill='#EDF0F7', outline='')
         self.create_oval(w - h, 0, w, h, fill='#EDF0F7', outline='')
         self.create_rectangle(h / 2, 0, w - h / 2, h, fill='#EDF0F7', outline='')
-        # 填充
         fw = w * self._cur
         if fw > 2:
             if self._cur < 0.6:
@@ -294,12 +292,10 @@ class PressureBar(tk.Canvas):
             else:
                 c1, c2 = WARN, DANGER
             if fw < h:
-                # 小填充用圆
                 self.create_oval(0, 0, h, h, fill=c1, outline='')
             else:
                 self.create_oval(0, 0, h, h, fill=c1, outline='')
                 self.create_rectangle(h / 2, 0, fw, h, fill=c1, outline='')
-                # 渐变尾部
                 for i in range(20):
                     t = i / 20
                     x0 = fw - (h / 2) * t * 0.8
@@ -312,6 +308,10 @@ class PressureBar(tk.Canvas):
 # 主应用
 # ----------------------------------------------------------------------
 class SessionManagerApp:
+    TOP_H = 104                # 顶栏高度
+    BOT_H = 40                 # 底栏高度
+    CARD_MARGIN = 16           # 卡片与窗口边缘的壁纸留白
+
     def __init__(self, root):
         self.root = root
         self.root.title('DSH 会话管理器 · 鲸鱼娘')
@@ -321,15 +321,15 @@ class SessionManagerApp:
 
         self.workspaces = []
         self.item_data = {}
-        self.view = 'sessions'          # 'sessions' | 'trash'
+        self.view = 'sessions'
         self.search_text = ''
         self.trash_items = []
         self._search_job = None
         self._resize_job = None
-        self._wallpaper_ref = None      # 持有 PhotoImage 引用
-        self._images = []               # 所有图片引用
-        self._hover_tags = {}           # 行 -> 原始 tags
-        self._logo_img = None           # 详情空状态 logo 缓存
+        self._wallpaper_ref = None
+        self._images = []
+        self._hover_tags = {}
+        self._logo_img = None
 
         self._build_ui()
         self._load_wallpaper()
@@ -341,74 +341,68 @@ class SessionManagerApp:
     # UI 构建
     # ------------------------------------------------------------------
     def _build_ui(self):
-        # 背景画布（放壁纸）
+        # 背景画布（壁纸铺满）
         self.bg = tk.Canvas(self.root, highlightthickness=0, bd=0)
         self.bg.place(x=0, y=0, relwidth=1, relheight=1)
-        draw_gradient(self.bg, 1280, 820)
+        draw_vertical_gradient(self.bg, 0, 0, 1280, 820, '#9FB4D8', '#E8EDF5', 'gradient')
 
-        # 顶部标题栏卡片
-        self.top_card = tk.Frame(self.root, bg=CARD, highlightthickness=1,
-                                 highlightbackground=BORDER)
-        self.top_card.place(relx=0.015, rely=0.018, relwidth=0.97, height=92)
+        # 顶栏渐变（放在壁纸上层，保证标题可读）
+        self.top_bar = tk.Canvas(self.root, highlightthickness=0, bd=0)
+        self.top_bar.place(x=0, y=0, relwidth=1, height=self.TOP_H)
+        draw_vertical_gradient(self.top_bar, 0, 0, 1280, self.TOP_H, TOP_GRAD_A, TOP_GRAD_B, 'topgrad')
 
+        # 底栏渐变
+        self.bottom_bar = tk.Canvas(self.root, highlightthickness=0, bd=0)
+        self.bottom_bar.place(x=0, rely=1.0, relwidth=1, height=self.BOT_H, anchor='sw')
+        draw_vertical_gradient(self.bottom_bar, 0, 0, 1280, self.BOT_H, BOT_GRAD_A, BOT_GRAD_B, 'botgrad')
+
+        # 鲸鱼娘圆形头像（顶栏左）
         logo_file = _asset(os.path.join('assets', 'logo_circle.png'))
         if logo_file:
             try:
                 logo_img = tk.PhotoImage(file=logo_file)
                 self._images.append(logo_img)
-                tk.Label(self.top_card, image=logo_img, bg=CARD).place(x=18, y=8)
+                self.bg.create_image(44, self.TOP_H / 2, image=logo_img)
             except Exception:
                 pass
 
-        f_title = _font(17, bold=True)
-        tk.Label(self.top_card, text='DSH 会话管理器', font=f_title,
-                 bg=CARD, fg=TEXT).place(x=128, y=12)
-        f_sub = _font(9)
-        tk.Label(self.top_card, text='鲸鱼娘守护的会话回收站 · DeepSeek Harness',
-                 font=f_sub, bg=CARD, fg=TEXT_SUB).place(x=129, y=46)
-        f_sub2 = _font(8)
-        tk.Label(self.top_card, text='删除会先进回收站，可恢复；DSH 运行中清理缓存会被写回覆盖',
-                 font=f_sub2, bg=CARD, fg='#9CA3AF').place(x=129, y=66)
+        # 标题（顶栏）
+        self.top_bar.create_text(96, 24, anchor='w', text='DSH 会话管理器',
+                                 font=_font(17, bold=True), fill='#FFFFFF')
+        self.top_bar.create_text(97, 48, anchor='w',
+                                 text='鲸鱼娘守护的会话回收站 · DeepSeek Harness',
+                                 font=_font(9), fill='#CBD5FF')
+        self.top_bar.create_text(97, 66, anchor='w',
+                                 text='删除先进回收站可恢复 · DSH 运行中清理缓存会被写回',
+                                 font=_font(8), fill='#9FB0E8')
 
-        # 搜索框（圆角白底 + 无边框 Entry）
-        self.search_canvas = tk.Canvas(self.top_card, width=300, height=40,
-                                       highlightthickness=0, bd=0, bg=CARD)
-        self.search_canvas.place(relx=1.0, x=-516, y=26, anchor='w')
-        self._round_rect(self.search_canvas, 0, 0, 300, 40, 12, fill=PRIMARY_GHOST, outline='')
-        self.search_canvas.create_text(34, 20, text='🔍', font=_font(13), tags='icon')
+        # 搜索框（顶栏右侧，白色圆角）
+        self.search_canvas = tk.Canvas(self.top_bar, width=280, height=38,
+                                       highlightthickness=0, bd=0, bg=PRIMARY)
+        self.search_canvas.place(relx=1.0, x=-480, y=33)
+        self._round_rect(self.search_canvas, 0, 0, 280, 38, 12, fill='#FFFFFF', outline='')
+        self.search_canvas.create_text(30, 19, text='🔍', font=_font(12), tags='icon')
         self.search_var = tk.StringVar()
-        self.search_entry = tk.Entry(self.top_card, textvariable=self.search_var,
+        self.search_entry = tk.Entry(self.top_bar, textvariable=self.search_var,
                                      font=_font(11), bd=0, relief='flat',
-                                     bg=PRIMARY_GHOST, fg=TEXT,
-                                     insertbackground=PRIMARY)
-        self.search_entry.place(relx=1.0, x=-472, y=38, width=244, height=20, anchor='w')
+                                     bg='#FFFFFF', fg=TEXT, insertbackground=PRIMARY)
+        self.search_entry.place(relx=1.0, x=-456, y=42, width=236, height=20, anchor='w')
         self.search_var.trace_add('write', self._on_search_change)
 
-        # 视图切换按钮（会话 / 回收站）
-        self.btn_view_sessions = HoverButton(self.top_card, '会话', self._show_sessions_view,
-                                             width=88, height=36, radius=10)
-        self.btn_view_sessions.place(relx=1.0, x=-204, y=28)
-        self.btn_view_trash = HoverButton(self.top_card, '回收站', self._show_trash_view,
-                                          width=88, height=36, radius=10, ghost=True)
-        self.btn_view_trash.place(relx=1.0, x=-108, y=28)
+        # 视图切换按钮
+        self.btn_view_sessions = HoverButton(self.top_bar, '会话', self._show_sessions_view,
+                                             width=88, height=34, radius=10,
+                                             bg_color=PRIMARY)
+        self.btn_view_sessions.place(relx=1.0, x=-188, y=35)
+        self.btn_view_trash = HoverButton(self.top_bar, '回收站', self._show_trash_view,
+                                          width=88, height=34, radius=10, ghost=True,
+                                          bg_color=PRIMARY)
+        self.btn_view_trash.place(relx=1.0, x=-94, y=35)
 
-        # 底部状态栏
-        self.bottom_card = tk.Frame(self.root, bg=CARD, highlightthickness=1,
-                                    highlightbackground=BORDER)
-        self.bottom_card.place(relx=0.015, rely=0.958, relwidth=0.97, height=34, anchor='nw')
-        self.status_var = tk.StringVar(value='正在加载...')
-        tk.Label(self.bottom_card, textvariable=self.status_var, font=_font(9),
-                 bg=CARD, fg=TEXT_SUB).place(x=14, y=8)
-        self.dot = StatusDot(self.bottom_card)
-        self.dot.place(relx=1.0, x=-110, y=2)
-        self.dsh_label = tk.Label(self.bottom_card, text='DSH 状态', font=_font(9),
-                                  bg=CARD, fg=TEXT_SUB)
-        self.dsh_label.place(relx=1.0, x=-96, y=8)
-
-        # 左侧：会话树卡片
+        # 左侧：会话树卡片（白卡浮于壁纸，四周留白露出壁纸）
         self.left_card = tk.Frame(self.root, bg=CARD, highlightthickness=1,
                                   highlightbackground=BORDER)
-        self.left_card.place(relx=0.015, y=110, relwidth=0.63)
+        self.left_card.place(relx=0.014, y=self.TOP_H + 12, relwidth=0.595)
 
         self.tree_header = tk.Frame(self.left_card, bg=PRIMARY_GHOST)
         self.tree_header.pack(fill='x')
@@ -473,40 +467,26 @@ class SessionManagerApp:
         self._hover_row = None
 
         # 右侧：详情卡片
-        right_x = 0.015 + 0.63 + 0.012
-        right_w = 0.97 - 0.63 - 0.012
         self.right_card = tk.Frame(self.root, bg=CARD, highlightthickness=1,
                                    highlightbackground=BORDER)
-        self.right_card.place(relx=right_x, y=110, relwidth=right_w)
+        self.right_card.place(relx=0.63, y=self.TOP_H + 12, relwidth=0.356)
 
-        # 详情标题
         self.detail_header = tk.Label(self.right_card, text='会话详情',
                                       font=_font(12, bold=True), bg=CARD, fg=TEXT,
                                       anchor='w')
         self.detail_header.pack(fill='x', padx=16, pady=(12, 4))
 
-        # 详情内容（Canvas 自绘，支持动画进度条）
-        self.detail = tk.Canvas(self.right_card, bg=CARD, highlightthickness=0, bd=0)
-        self.detail.pack(fill='both', expand=True, padx=16, pady=(0, 8))
-        self.detail.bind('<Configure>', lambda e: self._redraw_detail())
+        # 详情内容（外层 frame：canvas + 滚动条）
+        detail_frame = tk.Frame(self.right_card, bg=CARD)
+        detail_frame.pack(fill='both', expand=True, padx=(16, 8), pady=(0, 8))
+        self.detail = tk.Canvas(detail_frame, bg=CARD, highlightthickness=0, bd=0)
+        self.detail_sb = ttk.Scrollbar(detail_frame, orient='vertical',
+                                       command=self.detail.yview)
+        self.detail.configure(yscrollcommand=self.detail_sb.set)
+        self.detail.pack(side='left', fill='both', expand=True)
+        self.detail_sb.pack(side='right', fill='y')
         self._detail_state = None
-        self._pressure_bar = None
-
-        # 底部装饰：瓶子图
-        self.bottle_frame = tk.Frame(self.right_card, bg=CARD)
-        self.bottle_frame.pack(side='bottom', fill='x')
-        bottle_file = _asset(os.path.join('assets', 'bottle_small.png'))
-        if bottle_file:
-            try:
-                bottle_img = tk.PhotoImage(file=bottle_file)
-                self._images.append(bottle_img)
-                self.bottle_label = tk.Label(self.bottle_frame, image=bottle_img, bg=CARD)
-                self.bottle_label.pack(side='right', padx=10, pady=(0, 4))
-                tk.Label(self.bottle_frame, text='深海里的鲸鱼娘 · DeepSeek',
-                         font=_font(8), bg=CARD, fg='#C4C9D4').pack(
-                             side='right', padx=8, anchor='s')
-            except Exception:
-                pass
+        self._detail_views = []
 
         # 右侧按钮组
         self.btn_panel = tk.Frame(self.right_card, bg=CARD)
@@ -545,7 +525,17 @@ class SessionManagerApp:
                                            danger=True, width=274)
         self.btn_empty_trash.pack_forget()
 
-        # 初始视图按钮状态
+        # 底栏：状态文字 + 状态灯
+        self.status_var = tk.StringVar(value='正在加载...')
+        self.bottom_status = tk.Label(self.bottom_bar, textvariable=self.status_var,
+                                      font=_font(9), fg='#FFFFFF', bg=BOT_GRAD_A)
+        self.bottom_status.place(x=14, y=self.BOT_H / 2, anchor='w')
+        self.dot = StatusDot(self.bottom_bar, bg_color=BOT_GRAD_A)
+        self.dot.place(relx=1.0, x=-120, y=self.BOT_H / 2 - 11)
+        self.dsh_label = tk.Label(self.bottom_bar, text='DSH 状态', font=_font(9),
+                                  fg='#FFFFFF', bg=BOT_GRAD_A)
+        self.dsh_label.place(relx=1.0, x=-104, y=self.BOT_H / 2, anchor='w')
+
         self._sync_view_buttons()
 
     def _round_rect(self, canvas, x1, y1, x2, y2, r, **kw):
@@ -559,8 +549,6 @@ class SessionManagerApp:
     def _load_wallpaper(self):
         wp = _asset(os.path.join('assets', 'wallpaper.png'))
         if not wp:
-            draw_gradient(self.bg, max(self.root.winfo_width(), 400),
-                          max(self.root.winfo_height(), 300))
             return
         if _HAS_PIL:
             self._wallpaper_src = Image.open(wp).convert('RGB')
@@ -572,13 +560,14 @@ class SessionManagerApp:
                 self.bg.delete('wallpaper')
                 self.bg.create_image(0, 0, image=img, anchor='nw', tags='wallpaper')
             except Exception:
-                draw_gradient(self.bg, 1280, 820)
+                pass
 
     def _render_wallpaper(self):
+        if not (_HAS_PIL and hasattr(self, '_wallpaper_src')):
+            return
         w = max(self.root.winfo_width(), 200)
         h = max(self.root.winfo_height(), 200)
         src = self._wallpaper_src
-        # 等比例 cover 裁剪
         sw, sh = src.size
         scale = max(w / sw, h / sh)
         nw, nh = int(sw * scale), int(sh * scale)
@@ -586,9 +575,6 @@ class SessionManagerApp:
         left = (nw - w) // 2
         top = (nh - h) // 2
         img = img.crop((left, top, left + w, top + h))
-        # 顶部渐变压暗，保证标题可读
-        overlay = Image.new('RGB', (w, h), (255, 255, 255))
-        img = Image.blend(img, overlay, 0.10)
         photo = ImageTk.PhotoImage(img)
         self._wallpaper_ref = photo
         self.bg.delete('wallpaper')
@@ -599,13 +585,16 @@ class SessionManagerApp:
     def _on_resize(self, e):
         if e.widget is not self.root:
             return
-        # 动态调整左右卡片高度（顶部标题栏 92px + 间隙，底部状态栏 ~40px）
         h = self.root.winfo_height()
-        card_top = 110
-        card_bottom = h - 44
+        card_top = self.TOP_H + 10
+        card_bottom = h - self.BOT_H - 10
         card_h = max(card_bottom - card_top, 300)
         self.left_card.place(y=card_top, height=card_h)
         self.right_card.place(y=card_top, height=card_h)
+        # 顶/底栏渐变重绘
+        w = self.root.winfo_width()
+        draw_vertical_gradient(self.top_bar, 0, 0, w, self.TOP_H, TOP_GRAD_A, TOP_GRAD_B, 'topgrad')
+        draw_vertical_gradient(self.bottom_bar, 0, 0, w, self.BOT_H, BOT_GRAD_A, BOT_GRAD_B, 'botgrad')
         if self._resize_job:
             self.root.after_cancel(self._resize_job)
         self._resize_job = self.root.after(250, self._render_wallpaper)
@@ -618,7 +607,7 @@ class SessionManagerApp:
         self.dot.set_running(running)
         self.dsh_label.configure(
             text='DSH 运行中 · 缓存将被写回' if running else 'DSH 未运行 · 可安全清理',
-            fg=SUCCESS_DARK if running else TEXT_SUB)
+            fg='#A7F3D0' if running else '#FFFFFF')
         self.root.after(8000, self._refresh_dsh_status)
 
     # ------------------------------------------------------------------
@@ -626,12 +615,12 @@ class SessionManagerApp:
     # ------------------------------------------------------------------
     def _sync_view_buttons(self):
         if self.view == 'sessions':
-            self.btn_view_sessions._base = PRIMARY
+            self.btn_view_sessions._base = PRIMARY_DARK
             self.btn_view_sessions._fg = '#FFFFFF'
             self.btn_view_sessions._t = 0.0
             self.btn_view_sessions._draw()
-            self.btn_view_trash._base = CARD
-            self.btn_view_trash._fg = PRIMARY
+            self.btn_view_trash._base = PRIMARY
+            self.btn_view_trash._fg = '#FFFFFF'
             self.btn_view_trash._t = 0.0
             self.btn_view_trash._draw()
             self.view_title_var.set('会话列表')
@@ -643,12 +632,12 @@ class SessionManagerApp:
             self.btn_delold.pack(side='left', padx=(0, 8))
             self.btn_clean.pack(side='left')
         else:
-            self.btn_view_trash._base = PRIMARY
+            self.btn_view_trash._base = PRIMARY_DARK
             self.btn_view_trash._fg = '#FFFFFF'
             self.btn_view_trash._t = 0.0
             self.btn_view_trash._draw()
-            self.btn_view_sessions._base = CARD
-            self.btn_view_sessions._fg = PRIMARY
+            self.btn_view_sessions._base = PRIMARY
+            self.btn_view_sessions._fg = '#FFFFFF'
             self.btn_view_sessions._t = 0.0
             self.btn_view_sessions._draw()
             self.view_title_var.set('回收站')
@@ -730,9 +719,6 @@ class SessionManagerApp:
         if self.tree.selection():
             self._on_select(None)
 
-    # ------------------------------------------------------------------
-    # 树填充（回收站视图）
-    # ------------------------------------------------------------------
     def _populate_trash(self):
         self.tree.delete(*self.tree.get_children())
         self.item_data.clear()
@@ -810,10 +796,17 @@ class SessionManagerApp:
         self._redraw_detail()
 
     def _redraw_detail(self):
+        # 清空旧内容（含滚动窗口）
+        for w in self._detail_views:
+            try:
+                w.destroy()
+            except Exception:
+                pass
+        self._detail_views.clear()
         self.detail.delete('all')
-        self._pressure_bar = None
         data, kind = self._detail_state or (None, None)
-        w = max(self.detail.winfo_width(), 280)
+
+        w = max(self.detail.winfo_width(), 240)
         pad = 6
         y = 4
 
@@ -824,8 +817,8 @@ class SessionManagerApp:
                 try:
                     img = tk.PhotoImage(file=logo_file)
                     self._images.append(img)
-                    self.detail.create_image(w / 2, 120, image=img)
-                    y = 200
+                    self.detail.create_image(w / 2, 110, image=img)
+                    y = 190
                 except Exception:
                     y = 60
             self.detail.create_text(w / 2, y, text='选一个会话看看吧',
@@ -833,25 +826,42 @@ class SessionManagerApp:
             self.detail.create_text(w / 2, y + 24,
                                     text='这里会显示会话的统计信息\n（轮数、耗时、Token 用量、上下文压力）',
                                     font=_font(9), fill='#9CA3AF', justify='center')
+            self.detail.configure(scrollregion=(0, 0, w, max(self.detail.winfo_height(), 200)))
             return
 
+        # 内容装进一个内嵌 Canvas 以支持滚动
+        inner = tk.Canvas(self.detail, bg=CARD, highlightthickness=0, bd=0)
+        self.detail.create_window(0, 0, window=inner, anchor='nw')
+        self._detail_views.append(inner)
+
         if kind == 'session':
-            self._redraw_session_detail(data, w, pad, y)
+            content_h = self._draw_session_detail(inner, data, w, pad, y)
         else:
-            self._redraw_trash_detail(data, w, pad, y)
+            content_h = self._draw_trash_detail(inner, data, w, pad, y)
+        inner.configure(width=max(w - 2, 10), height=max(content_h + 10, 10))
+        self.detail.configure(scrollregion=(0, 0, w, content_h + 10))
+        self.detail.bind('<MouseWheel>', self._on_detail_wheel)
+
+    def _on_detail_wheel(self, e):
+        region = self.detail.cget('scrollregion')
+        try:
+            _, _, _, total_h = (float(v) for v in region.split())
+            if total_h > self.detail.winfo_height():
+                self.detail.yview_scroll(-1 * int(e.delta / 120), 'units')
+                return 'break'
+        except Exception:
+            pass
 
     def _detail_row(self, canvas, y, key, value, w, pad=6):
         canvas.create_text(pad + 4, y, text=key, font=_font(9), fill=TEXT_SUB, anchor='w')
-        canvas.create_text(w - pad - 4, y, text=value, font=_font(9, bold=True),
+        canvas.create_text(w - pad - 20, y, text=value, font=_font(9, bold=True),
                            fill=TEXT, anchor='e')
         return y + 26
 
-    def _redraw_session_detail(self, s, w, pad, y):
+    def _draw_session_detail(self, canvas, s, w, pad, y):
         title = s.get('title') or '（无标题）'
-        # 标题
-        canvas = self.detail
         canvas.create_text(pad + 4, y, text=title, font=_font(13, bold=True),
-                           fill=TEXT, anchor='w', width=w - 2 * pad - 8)
+                           fill=TEXT, anchor='w', width=w - 2 * pad - 24)
         y += 34
         badges = []
         if s['is_current']:
@@ -867,14 +877,14 @@ class SessionManagerApp:
             canvas.create_text(bx + tw / 2, y + 11, text=text, font=_font(9), fill=fg)
             bx += tw + 8
         y += 36
-        canvas.create_line(pad, y, w - pad, y, fill=BORDER)
+        canvas.create_line(pad, y, w - pad - 10, y, fill=BORDER)
         y += 14
 
         stats = s.get('stats') or {}
-        y = self._detail_row(canvas, y, '会话 ID', s['session_id'][:20] + '…', w)
-        y = self._detail_row(canvas, y, '工作区', decode_workspace(s['workspace_key'])[-28:] or s['workspace_key'][:24], w)
-        y = self._detail_row(canvas, y, '占用空间', format_size(s['size']), w)
-        y = self._detail_row(canvas, y, '最后修改', format_mtime(s['mtime']), w)
+        y = self._detail_row(canvas, y, '会话 ID', s['session_id'][:20] + '…', w, pad)
+        y = self._detail_row(canvas, y, '工作区', decode_workspace(s['workspace_key'])[-28:] or s['workspace_key'][:24], w, pad)
+        y = self._detail_row(canvas, y, '占用空间', format_size(s['size']), w, pad)
+        y = self._detail_row(canvas, y, '最后修改', format_mtime(s['mtime']), w, pad)
         if stats:
             y += 6
             canvas.create_text(pad + 4, y, text='— 统计 —', font=_font(9, bold=True),
@@ -883,56 +893,61 @@ class SessionManagerApp:
             turns = stats.get('turns')
             steps = stats.get('steps')
             if turns is not None:
-                y = self._detail_row(canvas, y, '对话轮数', str(turns) + ' 轮', w)
+                y = self._detail_row(canvas, y, '对话轮数', str(turns) + ' 轮', w, pad)
             if steps is not None:
-                y = self._detail_row(canvas, y, '执行步骤', str(steps) + ' 步', w)
+                y = self._detail_row(canvas, y, '执行步骤', str(steps) + ' 步', w, pad)
             if stats.get('llmMs') is not None:
-                y = self._detail_row(canvas, y, 'LLM 耗时', format_duration(stats['llmMs']), w)
+                y = self._detail_row(canvas, y, 'LLM 耗时', format_duration(stats['llmMs']), w, pad)
             if stats.get('toolMs') is not None:
-                y = self._detail_row(canvas, y, '工具耗时', format_duration(stats['toolMs']), w)
+                y = self._detail_row(canvas, y, '工具耗时', format_duration(stats['toolMs']), w, pad)
             if stats.get('inputTokens') is not None:
-                y = self._detail_row(canvas, y, '输入 Token', format_tokens(stats['inputTokens']), w)
+                y = self._detail_row(canvas, y, '输入 Token', format_tokens(stats['inputTokens']), w, pad)
             if stats.get('outputTokens') is not None:
-                y = self._detail_row(canvas, y, '输出 Token', format_tokens(stats['outputTokens']), w)
+                y = self._detail_row(canvas, y, '输出 Token', format_tokens(stats['outputTokens']), w, pad)
             if stats.get('cacheReadTokens') is not None:
-                y = self._detail_row(canvas, y, '缓存读取', format_tokens(stats['cacheReadTokens']), w)
+                y = self._detail_row(canvas, y, '缓存读取', format_tokens(stats['cacheReadTokens']), w, pad)
             surface = stats.get('surfaceTokens')
             window = stats.get('contextWindow')
             if surface is not None and window:
                 y += 8
                 ratio = min(1.0, surface / window)
                 canvas.create_text(pad + 4, y, text='上下文压力', font=_font(9), fill=TEXT_SUB, anchor='w')
-                canvas.create_text(w - pad - 4, y, text=f'{ratio * 100:.0f}%', font=_font(9, bold=True),
+                canvas.create_text(w - pad - 20, y, text=f'{ratio * 100:.0f}%',
+                                   font=_font(9, bold=True),
                                    fill=WARN if ratio > 0.85 else TEXT, anchor='e')
                 y += 18
-                bar_w = w - 2 * pad - 8
-                self._pressure_bar = PressureBar(self.detail, width=bar_w, height=12)
-                canvas.create_window(pad + 4, y, window=self._pressure_bar, anchor='nw')
-                self._pressure_bar.set_value(ratio)
+                bar_w = w - 2 * pad - 24
+                bar = PressureBar(canvas, width=bar_w, height=12)
+                canvas.create_window(pad + 4, y, window=bar, anchor='nw')
+                bar.set_value(ratio)
+                self._detail_views.append(bar)
                 y += 22
         else:
             y += 6
             canvas.create_text(pad + 4, y, text='暂无统计缓存（新会话或 DSH 未记录）',
                                font=_font(9), fill='#9CA3AF', anchor='w')
+            y += 22
+        return y
 
-    def _redraw_trash_detail(self, it, w, pad, y):
-        canvas = self.detail
+    def _draw_trash_detail(self, canvas, it, w, pad, y):
         title = it.get('title') or '（无标题）'
         canvas.create_text(pad + 4, y, text=title, font=_font(13, bold=True),
-                           fill=TEXT, anchor='w', width=w - 2 * pad - 8)
+                           fill=TEXT, anchor='w', width=w - 2 * pad - 24)
         y += 34
         canvas.create_rectangle(pad + 4, y, pad + 60, y + 22, fill=DANGER_LIGHT, outline='')
         canvas.create_text(pad + 32, y + 11, text='回收站', font=_font(9), fill=DANGER)
         y += 36
-        canvas.create_line(pad, y, w - pad, y, fill=BORDER)
+        canvas.create_line(pad, y, w - pad - 10, y, fill=BORDER)
         y += 14
-        y = self._detail_row(canvas, y, '会话 ID', it['session_id'][:20] + '…', w)
-        y = self._detail_row(canvas, y, '原工作区', it.get('workspace_name') or '?', w)
-        y = self._detail_row(canvas, y, '删除时间', it.get('deleted_at') or '-', w)
-        y = self._detail_row(canvas, y, '占用空间', format_size(it['size']), w)
+        y = self._detail_row(canvas, y, '会话 ID', it['session_id'][:20] + '…', w, pad)
+        y = self._detail_row(canvas, y, '原工作区', it.get('workspace_name') or '?', w, pad)
+        y = self._detail_row(canvas, y, '删除时间', it.get('deleted_at') or '-', w, pad)
+        y = self._detail_row(canvas, y, '占用空间', format_size(it['size']), w, pad)
         y += 10
         canvas.create_text(pad + 4, y, text='可随时恢复到原工作区，\n或彻底删除释放空间。',
                            font=_font(9), fill=TEXT_SUB, anchor='nw', justify='left')
+        y += 40
+        return y
 
     # ------------------------------------------------------------------
     # 选中目标收集
@@ -954,7 +969,7 @@ class SessionManagerApp:
         return targets, blocked
 
     # ------------------------------------------------------------------
-    # 操作：删除（入回收站）
+    # 操作
     # ------------------------------------------------------------------
     def _warn_dsh_running(self, action_name):
         if not detect_dsh_running():
@@ -1024,9 +1039,6 @@ class SessionManagerApp:
         if failed:
             self._show_failed(failed)
 
-    # ------------------------------------------------------------------
-    # 操作：恢复 / 归档
-    # ------------------------------------------------------------------
     def _restore_selected(self):
         targets, _ = self._selected_items('trash')
         if not targets:
@@ -1059,9 +1071,6 @@ class SessionManagerApp:
         else:
             messagebox.showerror('失败', '写入 workspace.json 失败。', parent=self.root)
 
-    # ------------------------------------------------------------------
-    # 操作：删除历史 / 清理残留
-    # ------------------------------------------------------------------
     def _delete_old(self):
         targets = [
             s for ws in self.workspaces for s in ws['sessions']
