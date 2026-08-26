@@ -1,0 +1,2 @@
+pimport { a as modeToggleLabel, i as desktopProductVersion, n as RENDERER_BOOT_TIMEOUT_MS, o as nextDesktopShellMode, r as desktopPreloadPath, t as ElectronDesktopRuntime } from "./electron-runtime-BrK7KnYi.js";
+export { ElectronDesktopRuntime, RENDERER_BOOT_TIMEOUT_MS, desktopPreloadPath, desktopProductVersion, modeToggleLabel, nextDesktopShellMode };

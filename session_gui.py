@@ -1144,9 +1144,9 @@ class SessionManagerApp:
             yes_text='仍要继续', no_text='取消', danger=True)
 
     def _note_cache_residue(self):
-        '''删除类操作后，若 DSH 运行中，提示缓存可能残留（不影响文件删除本身）。'''
+        '''删除类操作后，若 DSH 运行中，提示刷新 DSH 界面同步列表（无需重启）。'''
         if detect_dsh_running():
-            return ' · 提示: DSH 运行中，请按 F5 刷新 DSH 页面同步会话列表'
+            return ' · 提示: DSH 运行中，请点 DSH 标题栏"重载"或刷新网页同步列表'
         return ''
 
     def _delete_selected(self):
