@@ -7,6 +7,10 @@ DeepSeek Harness (DSH) 的会话管理工具：可视化 / 命令行查看、**�
 统计缓存在 `~/.dsh/storages/session_projcache.json`。
 本工具删除会话时**同步清理这些缓存，不留残留**。
 
+## 📣 社区
+
+- [DSH 官方讨论帖](https://github.com/deepseek-ai/deepseek-harness/discussions/4716) —— 欢迎留言反馈、提出功能建议 🐋
+
 ## ✨ 功能亮点
 
 | 功能 | 说明 |
