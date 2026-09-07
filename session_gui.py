@@ -24,6 +24,7 @@ from session_core import (
     perform_clean_residue, restore_trash_items, purge_trash_items,
     set_archived, detect_dsh_running, format_size, format_duration,
     format_tokens, format_age, format_mtime, decode_workspace,
+    infer_display_title,
     TRASH_DIR, SESSIONS_DIR, DSH_HOME, CURRENT_SESSION_ID, OLD_THRESHOLD_SECONDS,
 )
 
@@ -870,7 +871,8 @@ class SessionManagerApp:
                 tags=('workspace',), open=True)
             self.item_data[ws_iid] = {'kind': 'workspace', 'data': ws}
             for s in ws['sessions']:
-                title = s.get('title') or '(无标题)'
+                title = infer_display_title(s)
+                s['display_title'] = title   # 缓存，详情/删除确认复用
                 if s['is_current']:
                     note = '🛡 当前会话'
                 elif s['is_archived']:
@@ -893,7 +895,7 @@ class SessionManagerApp:
         self.item_data.clear()
         shown = 0
         for it in self.trash_items:
-            title = it.get('title') or '(无标题)'
+            title = it.get('title') or ('会话 ' + (it.get('session_id') or ''))
             shown += 1
             iid = self.tree.insert(
                 '', 'end', text='  ' + title,
@@ -1019,7 +1021,7 @@ class SessionManagerApp:
         return y + 26
 
     def _draw_session_detail(self, canvas, s, w, pad, y):
-        title = s.get('title') or '（无标题）'
+        title = s.get('display_title') or infer_display_title(s)
         canvas.create_text(pad + 4, y, text=title, font=_font(13, bold=True),
                            fill=TEXT, anchor='w', width=w - 2 * pad - 24)
         y += 34
@@ -1090,7 +1092,7 @@ class SessionManagerApp:
         return y
 
     def _draw_trash_detail(self, canvas, it, w, pad, y):
-        title = it.get('title') or '（无标题）'
+        title = it.get('title') or ('会话 ' + (it.get('session_id') or ''))
         canvas.create_text(pad + 4, y, text=title, font=_font(13, bold=True),
                            fill=TEXT, anchor='w', width=w - 2 * pad - 24)
         y += 34
@@ -1155,11 +1157,13 @@ class SessionManagerApp:
             DarkDialog.warn(
                 self.root, '当前会话受保护',
                 '以下会话正在进行中，不能删除：\n\n' +
-                '\n'.join('  • ' + (b.get('title') or b['session_id']) for b in blocked))
+                '\n'.join('  • ' + (b.get('display_title') or b.get('title') or b['session_id'])
+                          for b in blocked))
         if not targets:
             DarkDialog.info(self.root, '提示', '请先选择要删除的会话。')
             return
-        names = '\n'.join('  • ' + (t.get('title') or '(无标题)') for t in targets[:8])
+        names = '\n'.join('  • ' + (t.get('display_title') or infer_display_title(t))
+                          for t in targets[:8])
         if len(targets) > 8:
             names += f'\n  … 还有 {len(targets) - 8} 个'
         if not DarkDialog.confirm(

@@ -291,6 +291,132 @@ def load_archived_ids() -> list:
     return list(ids) if isinstance(ids, list) else []
 
 
+# ----------------------------------------------------------------------
+# 首句标题提取（会话日志 zstd 解码）
+#
+# DSH 会话日志存为 zstd 压缩的多帧串联 JSONL（session.jsonl.zstd）。
+# Python 标准库无法解码 zstd，因此调用 Node 内置的 zlib.zstdDecompress
+# （Node >= 22.24，与 DSH 使用同一实现）逐帧解码，提取首条用户消息
+# 作为会话标题——避免出现"(无标题)"。
+#
+# 提取结果按 (文件路径, 大小, mtime) 缓存，文件未变化时不再重复解码。
+# ----------------------------------------------------------------------
+_SCRIPT_NAME = 'title_extract.js'
+_node_bin = None      # 探测到的 node 可执行路径
+_title_cache = {}     # path -> (size, mtime, title)
+_title_retry_at = {}  # path -> 下次允许重试的时间戳（解码失败时防频繁重试）
+
+
+def _find_node() -> str:
+    '''探测系统可用的 node 可执行文件。找不到返回空串。'''
+    global _node_bin
+    if _node_bin is not None:
+        return _node_bin
+    candidates = []
+    env_paths = os.environ.get('PATH', '')
+    for p in env_paths.split(os.pathsep):
+        if p:
+            candidates.append(os.path.join(p, 'node'))
+            candidates.append(os.path.join(p, 'node.exe'))
+    # 常见安装位置
+    candidates += [
+        r'C:\Program Files\nodejs\node.exe',
+        r'C:\Program Files (x86)\nodejs\node.exe',
+        str(Path.home() / 'AppData' / 'Roaming' / 'nvm'),
+        '/usr/bin/node', '/usr/local/bin/node', '/opt/homebrew/bin/node',
+    ]
+    seen = set()
+    for c in candidates:
+        c = c.replace('\\', os.sep)
+        if c in seen or not c:
+            continue
+        seen.add(c)
+        if Path(c).is_file() if os.sep == '\\' else os.access(c, os.X_OK):
+            _node_bin = c
+            return c
+    _node_bin = ''
+    return ''
+
+
+def _title_script_path():
+    '''定位 title_extract.js（exe 打包后从 _MEIPASS 读取，源码模式同目录）。'''
+    candidates = []
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        candidates.append(Path(meipass) / _SCRIPT_NAME)
+    candidates.append(Path(__file__).resolve().parent / _SCRIPT_NAME)
+    for c in candidates:
+        if c.exists():
+            return str(c)
+    return ''
+
+
+def extract_title_from_log(session_file: Path) -> str:
+    '''从会话日志提取首句用户消息作为标题。返回空串表示无法提取。'''
+    global _title_cache, _title_retry_at
+    try:
+        st = session_file.stat()
+        cache_key = str(session_file)
+        cached = _title_cache.get(cache_key)
+        if cached and cached[0] == st.st_size and cached[1] == st.st_mtime:
+            return cached[2]
+        # 节流：同一文件 30s 内不重复解码（防 3s 自动刷新反复触发）
+        import time as _time
+        now = _time.time()
+        if now < _title_retry_at.get(cache_key, 0):
+            cached_old = _title_cache.get(cache_key)
+            return cached_old[2] if cached_old else ''
+
+        node = _find_node()
+        script = _title_script_path()
+        if not node or not script:
+            _title_retry_at[cache_key] = now + 60
+            return ''
+
+        # 调用 node：一次解码提取（设短超时，日志过大时放弃）
+        creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0) if IS_WINDOWS else 0
+        result = subprocess.run(
+            [node, script, str(session_file)],
+            capture_output=True, text=True, encoding='utf-8',
+            errors='replace', timeout=15,
+            creationflags=creationflags,
+        )
+        title = (result.stdout or '').strip()
+        _title_cache[cache_key] = (st.st_size, st.st_mtime, title)
+        if not title:
+            # 无结果（空会话/无用户消息）：30s 后再试
+            _title_retry_at[cache_key] = now + 30
+        return title
+    except Exception:
+        try:
+            import time as _time2
+            _title_retry_at[cache_key] = _time2.time() + 60
+        except Exception:
+            pass
+        return ''
+
+
+def infer_display_title(session) -> str:
+    '''给一个会话算出"必定非空"的显示标题。
+
+    优先级：projcache 标题 → 日志首句 → 会话 ID 截断（绝不显示"(无标题)"）。
+    '''
+    t = session.get('title')
+    if t and str(t).strip():
+        return str(t).strip()
+    # 尝试日志首句
+    spath = session.get('path')
+    if spath:
+        extracted = extract_title_from_log(Path(spath) / 'session.jsonl.zstd')
+        if extracted and len(extracted) >= 2:
+            if len(extracted) > 60:
+                extracted = extracted[:60] + '…'
+            return extracted
+    # 降级：会话 ID 截断（绝不显示"(无标题)"）
+    sid = session.get('session_id', '')
+    return ('会话 ' + sid) if sid else '(空会话)'
+
+
 def scan_workspaces() -> list:
     '''扫描 sessions 目录，返回“工作区 -> 会话”树形列表。
 
@@ -962,7 +1088,7 @@ def print_workspaces(workspaces):
             idx += 1
             cur = '  <- 当前会话' if s['is_current'] else ''
             arch = '  [已归档]' if s['is_archived'] else ''
-            title = s.get('title') or '(无标题)'
+            title = infer_display_title(s)
             stats = s.get('stats') or {}
             extra = ''
             if stats:
@@ -1010,7 +1136,7 @@ def cmd_search(workspaces, keyword):
     matched = []
     for ws in workspaces:
         for s in ws['sessions']:
-            title = (s.get('title') or '').lower()
+            title = infer_display_title(s).lower()
             if kw in title or kw in s['session_id'].lower() or kw in ws['name'].lower():
                 matched.append((ws, s))
     if not matched:
@@ -1022,7 +1148,7 @@ def cmd_search(workspaces, keyword):
         cur = '  <- 当前会话' if s['is_current'] else ''
         arch = '  [已归档]' if s['is_archived'] else ''
         print(f'  [{i}] {s["session_id"]}  {format_size(s["size"])}  {format_age(s["age"])}  '
-              f'{s.get("title") or "(无标题)"}  @ {ws["name"]}{cur}{arch}')
+              f'{infer_display_title(s)}  @ {ws["name"]}{cur}{arch}')
     print()
 
 
@@ -1085,8 +1211,9 @@ def cmd_trash():
     print()
     print('回收站 ' + str(len(items)) + ' 个条目：')
     for i, it in enumerate(items, 1):
+        title = it.get('title') or ('会话 ' + it['session_id'])
         print(f'  [{i}] {it["session_id"]}  {format_size(it["size"])}  删除于 {it["deleted_at"]}  '
-              f' {it.get("title") or "(无标题)"}  @ {it.get("workspace_name") or "?"}')
+              f' {title}  @ {it.get("workspace_name") or "?"}')
     print()
 
 
@@ -1115,7 +1242,8 @@ def cmd_restore(indexes):
     print()
     print('即将恢复：')
     for it in targets:
-        print('  - ' + it['session_id'] + '  (' + (it.get('title') or '无标题') + ')')
+        title = it.get('title') or ('会话 ' + it['session_id'])
+        print('  - ' + it['session_id'] + '  (' + title + ')')
     answer = input('确认恢复吗？输入 yes 继续: ').strip().lower()
     if answer != 'yes':
         print('已取消。')

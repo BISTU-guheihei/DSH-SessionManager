@@ -234,6 +234,7 @@ def run_pyinstaller():
             command += ['--icon', str(png_icon)]
 
     # 数据文件：assets（鲸鱼娘 logo / 头像 / 窗口图标）+ whalegirl 图标
+    # + title_extract.js（node zstd 解码提取会话首句标题）
     sep = ';' if IS_WINDOWS else ':'
     for asset_name in os.listdir(ASSETS_DIR):
         asset_path = ASSETS_DIR / asset_name
@@ -243,6 +244,9 @@ def run_pyinstaller():
         asset_path = WHALEGIRL_DIR / asset_name
         if asset_path.exists() and asset_path.stat().st_size > 0:
             command += ['--add-data', str(asset_path) + sep + 'whalegirl']
+    script_js = PROJECT_DIR / 'title_extract.js'
+    if script_js.exists():
+        command += ['--add-data', str(script_js) + sep + '.']
 
     command.append(str(SOURCE_SCRIPT))
     subprocess.check_call(command, cwd=str(PROJECT_DIR))
