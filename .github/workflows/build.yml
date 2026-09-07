@@ -1,12 +1,15 @@
 # =====================================================================
-# DSH 会话管理器 —— 双平台自动打包
+# DSH 会话管理器 —— 双平台自动打包 + 自动发布
 #
-# 触发：push 标签 v*（如 v1.1.0）时，在 Windows 与 Ubuntu 上分别打包：
-#   - Windows: dist/DSH_SessionManager.exe
-#   - Linux:   dist/DSH_SessionManager （ELF 可执行文件，无 .exe 后缀）
+# 触发：push 标签 v*（如 v1.2.2）时：
+#   1. Windows / Ubuntu 上分别打包可执行文件
+#   2. 打成带平台名的 zip（DSH_SessionManager-windows.zip / -linux.zip）
+#   3. 自动上传到该 tag 对应的 GitHub Release
 #
-# 产物作为 GitHub Actions Artifact 上传，可在 workflow 运行页下载，
-# 也可结合 Release 手动上传发布。
+# 产物会同时出现在：
+#   - Actions 运行页的 Artifacts（下载用）
+#   - 对应 tag 的 Release 附件（softprops/action-gh-release 自动挂载，
+#     若该 tag 还没有 Release 则自动创建）
 # =====================================================================
 
 name: build
@@ -15,7 +18,7 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:      # 支持手动触发
+  workflow_dispatch:      # 支持手动触发（仅构建，不发布）
 
 jobs:
   build-windows:
@@ -40,11 +43,18 @@ jobs:
       - name: Build exe
         run: python build_exe.py
 
+      - name: Package Windows zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-staging
+          Copy-Item dist\DSH_SessionManager.exe release-staging\
+          Compress-Archive -Path release-staging\DSH_SessionManager.exe -DestinationPath DSH_SessionManager-windows.zip -Force
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: DSH_SessionManager-windows
-          path: dist/DSH_SessionManager.exe
+          path: DSH_SessionManager-windows.zip
 
   build-linux:
     name: Build Linux binary
@@ -71,8 +81,50 @@ jobs:
       - name: Build binary
         run: python build_exe.py
 
+      - name: Package Linux zip
+        run: |
+          mkdir -p release-staging
+          cp dist/DSH_SessionManager release-staging/
+          cd release-staging && zip ../DSH_SessionManager-linux.zip DSH_SessionManager
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: DSH_SessionManager-linux
-          path: dist/DSH_SessionManager
+          path: DSH_SessionManager-linux.zip
+
+  # 把两个 zip 挂到 tag 对应的 GitHub Release（无 Release 则自动创建）
+  publish:
+    name: Publish to GitHub Release
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la release-assets/
+
+      - name: Attach binaries to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/DSH_SessionManager-windows.zip
+            release-assets/DSH_SessionManager-linux.zip
+          generate_release_notes: true
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          body: |
+            ## 📥 下载
+
+            | 平台 | 文件 |
+            |------|------|
+            | Windows | `DSH_SessionManager-windows.zip` |
+            | Linux | `DSH_SessionManager-linux.zip` |
+
+            > 由 GitHub Actions 自动构建并发布。完整说明见仓库 README。
