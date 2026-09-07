@@ -419,9 +419,47 @@ def _workspace_entry_for_key(data: dict, workspace_key: str):
 # ----------------------------------------------------------------------
 # 回收站
 # ----------------------------------------------------------------------
-def _trash_target_dir(session_id: str) -> Path:
-    '''回收站里该会话的目标文件夹（按会话 ID 命名，重复删除时覆盖前一次）。'''
+def _trash_target_dir(session_id: str, timestamp: str = '') -> Path:
+    '''回收站里该会话的目标文件夹。
+
+    使用 "会话ID__删除时间戳" 命名，保证同一会话重复删除时生成
+    唯一、不可覆盖的新恢复点（不会擦掉之前的恢复点）。
+    '''
+    if timestamp:
+        return TRASH_DIR / f'{session_id}__{timestamp}'
     return TRASH_DIR / session_id
+
+
+def _load_projcache_entry(session_id: str):
+    '''读取 session_projcache.json 里某会话的完整缓存条目（删除时快照用）。'''
+    data = _load_json(SESSION_PROJCACHE_JSON)
+    if not data:
+        return None
+    sessions = (data.get('tables') or {}).get('sessions') or {}
+    if not isinstance(sessions, dict):
+        return None
+    entry = sessions.get(session_id)
+    return entry if isinstance(entry, dict) else None
+
+
+def _write_projcache_entry(session_id: str, entry: dict) -> bool:
+    '''把某会话的缓存条目写回 session_projcache.json（恢复标题/统计用）。'''
+    if not entry:
+        return True
+    data = _load_json(SESSION_PROJCACHE_JSON)
+    if data is None:
+        data = {'unit': {'name': 'session_projcache', 'version': 3},
+                'global': None, 'tables': {'sessions': {}}}
+    tables = data.get('tables')
+    if not isinstance(tables, dict):
+        tables = {}
+        data['tables'] = tables
+    sessions = tables.get('sessions')
+    if not isinstance(sessions, dict):
+        sessions = {}
+        tables['sessions'] = sessions
+    sessions[session_id] = entry
+    return _save_json(SESSION_PROJCACHE_JSON, data)
 
 
 def move_sessions_to_trash(sessions: list) -> tuple:
@@ -434,17 +472,23 @@ def move_sessions_to_trash(sessions: list) -> tuple:
             continue
         try:
             TRASH_DIR.mkdir(parents=True, exist_ok=True)
-            target = _trash_target_dir(s['session_id'])
+            # 唯一时间戳目录：同一会话重复删除不覆盖旧恢复点
+            timestamp = datetime.now().strftime('%Y%m%d-%H%M%S-%f')
+            target = _trash_target_dir(s['session_id'], timestamp)
             if target.exists():
                 shutil.rmtree(target)
             shutil.move(str(s['path']), str(target))
+            # 快照 projcache 缓存条目（标题/统计），恢复时写回缓存
+            projcache_entry = _load_projcache_entry(s['session_id'])
             manifest = {
                 'session_id': s['session_id'],
                 'title': s.get('title'),
                 'workspace_key': s.get('workspace_key'),
                 'workspace_name': decode_workspace(s.get('workspace_key', '')),
                 'deleted_at': now_iso(),
+                'timestamp': timestamp,
                 'size': s.get('size', 0),
+                'projcache': projcache_entry,
             }
             with open(target / TRASH_MANIFEST_NAME, 'w', encoding='utf-8') as f:
                 json.dump(manifest, f, ensure_ascii=False, indent=2)
@@ -470,15 +514,21 @@ def list_trash_items() -> list:
             except Exception:
                 manifest = {}
         size, mtime = dir_total_size_mtime(d)
+        # 目录名兼容两种格式：session-xxx（旧）或 session-xxx__时间戳（新）
+        raw_sid = d.name
+        session_id = manifest.get('session_id') or raw_sid
+        if not manifest.get('session_id') and '__' in raw_sid:
+            session_id = raw_sid.split('__', 1)[0]
         items.append({
             'trash_dir': d,
-            'session_id': manifest.get('session_id') or d.name,
+            'session_id': session_id,
             'title': manifest.get('title'),
             'workspace_key': manifest.get('workspace_key', ''),
             'workspace_name': manifest.get('workspace_name', ''),
             'deleted_at': manifest.get('deleted_at', ''),
             'size': manifest.get('size') or size,
             'mtime': mtime,
+            'projcache': manifest.get('projcache'),
         })
     # 按删除时间倒序（有 manifest 的用字段，否则按目录 mtime）
     def _sort_key(it):
@@ -491,7 +541,7 @@ def list_trash_items() -> list:
 
 
 def restore_trash_items(items: list) -> tuple:
-    '''从回收站恢复会话（移回原工作区并修复 workspace.json）。返回 (成功, 失败)。'''
+    '''从回收站恢复会话（移回原工作区并修复 workspace.json / 缓存）。返回 (成功, 失败)。'''
     restored = []
     failed = []
     for it in items:
@@ -513,6 +563,10 @@ def restore_trash_items(items: list) -> tuple:
                 continue
             shutil.move(str(src), str(dest))
             _fix_workspace_json_after_restore(ws_key, sid)
+            # 恢复标题/统计：把删除时快照的 projcache 缓存条目写回
+            projcache_entry = it.get('projcache')
+            if projcache_entry:
+                _write_projcache_entry(sid, projcache_entry)
             restored.append(it)
         except OSError as ex:
             failed.append((it, '恢复失败: ' + str(ex)))
