@@ -13,6 +13,7 @@
   统计缓存 session_projcache.json（单文件）/ session_projcache/sessions/*.json
 '''
 
+import csv
 import json
 import os
 import shutil
@@ -299,24 +300,71 @@ def _save_json(path: Path, data) -> bool:
 
 # ----------------------------------------------------------------------
 # DSH 运行检测
+#
+# 各发行版的进程名并不统一，实测：
+#   - DSH Desktop（Windows 安装包）可执行文件叫 "DeepSeek Harness.exe"，
+#     进程名是 "DeepSeek Harness"（Electron 会起多个同名进程），
+#     **与安装目录名 "Deepseek_desk" 无关**；
+#   - 早期版本 / 网页版 host 用 dsh / dsh.exe / dsh-web / "dsh desktop"，
+#     或作为 node 进程（node.exe / node）跑。
+# 旧实现只找 'dsh'，因此在 DSH Desktop 运行时永远判定为"未运行"，
+# 导致归档 / 清理缓存时缺少"DSH 运行中可能写回"的重要提醒。
 # ----------------------------------------------------------------------
-def detect_dsh_running() -> bool:
-    '''检测 DSH 是否正在运行（跨平台）。'''
-    try:
-        if IS_WINDOWS:
-            out = subprocess.run(
-                ['tasklist', '/FO', 'CSV', '/NH'],
-                capture_output=True, text=True, timeout=10,
-                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
-            ).stdout.lower()
-            return 'dsh' in out and ('dsh desktop' in out or 'dsh-web' in out or 'dsh.exe' in out or 'node.exe' in out and 'dsh' in out)
+# 进程名基础名（已去掉 .exe 后缀、小写）精确匹配，避免把路径里偶然含
+# dsh 的进程误判成 DSH
+_DSH_PROCESS_BASENAMES = (
+    'deepseek harness',      # DSH Desktop（Windows 安装包）
+    'dsh',                   # CLI / host
+    'dsh desktop',
+    'dsh-desktop',
+    'dsh-web',               # 网页版 host
+)
+
+
+def _list_process_names() -> list:
+    '''返回当前进程名列表（小写、去路径、去 .exe 后缀）。
+
+    用 csv 模块解析 tasklist 的 CSV 输出：进程名本身含空格
+    （如 "DeepSeek Harness"），按空白切分会截断，必须先按 CSV 拆列。
+    Windows 的 tasklist 给的是 xxx.exe，统一去掉后缀以便与基础名比较。
+    '''
+    names = []
+    if IS_WINDOWS:
+        out = subprocess.run(
+            ['tasklist', '/FO', 'CSV', '/NH'],
+            capture_output=True, text=True, errors='replace', timeout=10,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+        ).stdout or ''
+        raw = [row[0] for row in csv.reader(out.splitlines()) if row and row[0].strip()]
+    else:
+        # comm= 只给可执行名
         out = subprocess.run(
             ['ps', '-ax', '-o', 'comm='],
-            capture_output=True, text=True, timeout=10,
-        ).stdout.lower()
-        return 'dsh' in out
+            capture_output=True, text=True, errors='replace', timeout=10,
+        ).stdout or ''
+        raw = [line for line in out.splitlines() if line.strip()]
+    for item in raw:
+        name = os.path.basename(item.strip().strip('"')).lower()
+        if name.endswith('.exe'):
+            name = name[:-4]
+        if name:
+            names.append(name)
+    return names
+
+
+def detect_dsh_running() -> bool:
+    '''检测 DSH 是否正在运行（Windows / macOS / Linux）。
+
+    只做基础名精确匹配：'dsh' 能覆盖 dsh / dsh.exe / dsh-desktop 等，
+    但不会把 dshhelper 这类无关进程误判成 DSH。
+    '''
+    try:
+        for name in _list_process_names():
+            if name in _DSH_PROCESS_BASENAMES:
+                return True
+        return False
     except Exception:
-        # 检测失败时保守返回 False（不阻塞用户操作）
+        # 检测失败时保守返回 False（不阻塞用户操作，只是少一条提示）
         return False
 
 
@@ -348,6 +396,12 @@ def dir_total_size_mtime(path: Path):
     return total, mtime
 
 
+def _put(entry: dict, key: str, value):
+    '''只在取到有效值时才写入，避免产生一堆 None 键（会让空 rows 也非空）。'''
+    if value is not None:
+        entry[key] = value
+
+
 def _stats_from_rows(rows) -> dict:
     '''从 DSH 缓存的 rows 结构里取出标题与统计字段。
 
@@ -377,25 +431,25 @@ def _stats_from_rows(rows) -> dict:
     if isinstance(s, dict):
         val = s.get('val') or {}
         if isinstance(val, dict):
-            entry['turns'] = val.get('turns')
-            entry['steps'] = val.get('steps')
-            entry['llmMs'] = val.get('llmMs')
-            entry['toolMs'] = val.get('toolMs')
+            _put(entry, 'turns', val.get('turns'))
+            _put(entry, 'steps', val.get('steps'))
+            _put(entry, 'llmMs', val.get('llmMs'))
+            _put(entry, 'toolMs', val.get('toolMs'))
     t = rows.get('tokenUsage') or {}
     if isinstance(t, dict):
         val = t.get('val') or {}
         if isinstance(val, dict):
             totals = val.get('totals') or {}
             if isinstance(totals, dict):
-                entry['inputTokens'] = totals.get('uncachedInputTokens')
-                entry['outputTokens'] = totals.get('outputTokens')
-                entry['cacheReadTokens'] = totals.get('cacheReadTokens')
+                _put(entry, 'inputTokens', totals.get('uncachedInputTokens'))
+                _put(entry, 'outputTokens', totals.get('outputTokens'))
+                _put(entry, 'cacheReadTokens', totals.get('cacheReadTokens'))
     p = rows.get('contextPressure') or {}
     if isinstance(p, dict):
         val = p.get('val') or {}
         if isinstance(val, dict):
-            entry['surfaceTokens'] = val.get('surfaceTokens')
-            entry['contextWindow'] = val.get('contextWindow')
+            _put(entry, 'surfaceTokens', val.get('surfaceTokens'))
+            _put(entry, 'contextWindow', val.get('contextWindow'))
     return entry
 
 

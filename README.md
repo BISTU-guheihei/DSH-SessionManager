@@ -34,6 +34,7 @@ DeepSeek Harness (DSH) 的会话管理工具：可视化 / 命令行查看、**�
 | 🔄 实时监视 | GUI 每 3 秒自动静默刷新（保留选择），新会话出现 / 删除消失自动反映；孤儿缓存实时计数 |
 | 🛡 安全保护 | 当前会话永不删除；删除前确认；当前会话 / 工作区高亮与选中区分 |
 | ✓ 清理校验 | `clean` 后自动复查，报告是否仍有残留（例如被运行中的 DSH 写回） |
+| 🧪 自带自测 | `python manage_sessions.py test` 一键校验编码、运行检测、日志解析等核心逻辑（纯标准库，无需真实数据） |
 | 🎨 鲸鱼娘主题 | 深色护眼配色（黑灰底 + DeepSeek 蓝点缀）、圆形头像、渐变按钮（投影/上浮/按压）、深色对话框 |
 | 🌍 跨平台 | Windows / macOS / Linux 均可源码运行；`build-exe` 支持三平台打包 |
 
@@ -115,8 +116,57 @@ python manage_sessions.py restore 1 3    # 从回收站恢复到原工作区
 python manage_sessions.py empty-trash    # 彻底清空回收站（不可恢复！）
 python manage_sessions.py clean [--yes]  # 清理缓存/磁盘孤儿残留 + 结果校验
 python manage_sessions.py status         # DSH 运行状态 / 回收站概况
+python manage_sessions.py test           # 运行自测（校验核心逻辑，纯标准库）
 python manage_sessions.py build-exe      # 生成独立可执行文件
 ```
+
+### 自测
+
+项目不依赖第三方测试框架，自带一套纯标准库自测（编码/解码、DSH 运行检测的识别与误报、会话日志名解析、标题解析与 UTF-8 安全截断、统计字段解析、格式化容错）：
+
+```bash
+python manage_sessions.py test     # 或 python test_selftest.py
+```
+
+## 常见问题
+
+**Q：会话标题显示成 `会话 session-xxxx`（一串字母），统计也空白？**
+说明工具没能读到 DSH 的数据，按下面两步排查：
+
+1. **DSH 升级后存储格式变了**。工具已同时兼容新旧两种布局（见上方「兼容性」表），但若你用的是**很旧的版本**，请更新到最新 Release 或源码。
+2. **缺少 Node.js**。智能标题需要调用 Node 内置的 `zlib` 解压会话日志（Node ≥ 22.24）。没装 Node 时会降级显示会话 ID —— 这是设计好的兜底，不是崩溃。装好 Node 后重开工具即可。
+
+**Q：状态栏 / `status` 显示「DSH 未运行」，但我明明开着 DSH？**
+已修复。历史上工具只按进程名 `dsh` 判断，而 **DSH Desktop 的进程名实际是 `DeepSeek Harness`**，导致永远判定为「未运行」，从而少了「DSH 运行中，归档/清理缓存可能被写回覆盖」这条重要提醒。现在会同时识别：
+
+| 运行方式 | 进程名 |
+|----------|--------|
+| DSH Desktop（Windows 安装包） | `DeepSeek Harness` |
+| 命令行 / 网页版 host | `dsh` / `dsh-web` / `dsh desktop` |
+
+判断采用**基础名精确匹配**，不会把 `dshhelper` 之类无关进程误判成 DSH。
+
+**Q：`git push` 卡住或报 `Failed to connect to github.com:443 over proxy 127.0.0.1`？**
+git 单独配置了代理（与系统代理分开），代理没开就会失败。检查与处理：
+
+```bash
+git config --global --get http.proxy     # 看当前代理
+git config --global --unset http.proxy   # 不需要代理时清掉
+git config --global --unset https.proxy
+```
+
+**Q：`git` 报 `Another git process seems to be running`？**
+通常是上一次操作异常中断留下了锁文件，删掉即可（它只是个空锁，删它不会丢数据）：
+
+```bash
+rm -f .git/index.lock          # Windows PowerShell: Remove-Item .git\index.lock -Force
+```
+
+**Q：删除会话后，DSH 界面里还看得到？**
+DSH 的会话列表是内存快照，需要手动刷新：**网页版按 F5**；**桌面版点标题栏右侧的旋转箭头 → "重载 / Reload"**。都不需要重启 DSH。
+
+**Q：GUI 启动时终端出现 `libpng warning: iCCP: known incorrect sRGB profile`？**
+来自图标素材的 ICC 配置，属于**无害警告**，不影响显示与功能。
 
 ## 为什么选择本工具？
 
@@ -124,7 +174,7 @@ python manage_sessions.py build-exe      # 生成独立可执行文件
 其他 DSH 会话删除往往直接物理删除、不可恢复；本工具删除先入回收站，误删可随时恢复，彻底删除才真正释放空间。
 
 **2. 清理最彻底 —— 缓存同步清理 + 结果校验**
-删除会话时同步清理 `workspace.json` 与 `session_projcache.json` 的残留记录；`clean` 后自动复查，报告是否仍有孤儿（例如 DSH 运行中写回导致的残留），不留脏数据。
+删除会话时同步清理 `workspace.json` 与统计缓存（`session_projcache/` 或 `session_projcache.json`）的残留记录；`clean` 后自动复查，报告是否仍有孤儿（例如 DSH 运行中写回导致的残留），不留脏数据。
 
 **3. DSH 运行中也能用 —— 无需关闭应用**
 删除 / 恢复 / 彻底删除只操作会话文件，DSH 运行中直接执行；配合"重载 / F5"同步列表，全程无需重启 DSH。

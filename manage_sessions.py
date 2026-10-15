@@ -29,6 +29,7 @@ DSH 会话管理工具 —— 鲸鱼娘守护的会话回收站
     python manage_sessions.py empty-trash  # 彻底清空回收站（不可恢复）
     python manage_sessions.py clean        # 清理缓存/磁盘孤儿残留（含结果校验）
     python manage_sessions.py status       # 显示 DSH 状态 / 回收站概况
+    python manage_sessions.py test         # 运行自测（校验核心逻辑，纯标准库）
     python manage_sessions.py build-exe    # 调用 build_exe.py 生成独立 exe
 
 【数据位置】
@@ -102,6 +103,20 @@ def cmd_build_exe():
     return subprocess.call([str(venv_python), str(build_script)])
 
 
+def cmd_self_test():
+    '''运行自测脚本（纯标准库，校验编码/检测/解析等核心逻辑）。'''
+    if getattr(sys, 'frozen', False):
+        print('自测是源码项目里的开发功能，请回到源码目录运行:')
+        print('    python manage_sessions.py test')
+        return 1
+    project_dir = Path(__file__).resolve().parent
+    script = project_dir / 'test_selftest.py'
+    if not script.exists():
+        print('找不到自测脚本: ' + str(script))
+        return 1
+    return subprocess.call([sys.executable, str(script)])
+
+
 def print_usage():
     print(__doc__)
 
@@ -119,6 +134,9 @@ def main():
 
     if cmd in ('build-exe', 'build'):
         return cmd_build_exe()
+
+    if cmd in ('test', 'selftest', 'self-test'):
+        return cmd_self_test()
 
     workspaces = get_workspaces()
 
