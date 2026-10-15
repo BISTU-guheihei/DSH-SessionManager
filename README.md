@@ -165,6 +165,21 @@ rm -f .git/index.lock          # Windows PowerShell: Remove-Item .git\index.lock
 **Q：删除会话后，DSH 界面里还看得到？**
 DSH 的会话列表是内存快照，需要手动刷新：**网页版按 F5**；**桌面版点标题栏右侧的旋转箭头 → "重载 / Reload"**。都不需要重启 DSH。
 
+**Q：双击或运行 exe 报 `Could not create temporary directory!`（或闪一下就没反应）？**
+这是 PyInstaller **单文件（onefile）打包的固有行为**：exe 每次启动都要先把内部文件解包到一个临时目录，所以**必须有一个可写的临时目录**。常见原因：
+
+| 原因 | 处理 |
+|------|------|
+| `TEMP` / `TMP` 指向不可写的位置（受限账号、企业策略、沙箱环境） | 改成可写目录：`set TEMP=D:\temp` 后再运行 |
+| 临时目录不存在或被清理工具删了 | 手动建回 `%LOCALAPPDATA%\Temp` |
+| 磁盘空间不足 | 清理磁盘；单文件版启动时约需十几 MB 解包空间 |
+| 杀毒软件拦截了解包行为 | 把 exe 加入白名单，或改用源码运行 |
+
+排查时可先看错误信息：在命令行里运行 exe 就能看到 `[PYI-xxxx:ERROR] Could not create temporary directory!` 这类提示，而不是双击时的一闪而过。
+
+> 如果所在环境长期不允许写临时目录，**直接用源码运行**即可绕开（源码模式不需要解包）：
+> `python manage_sessions.py list`
+
 **Q：GUI 启动时终端出现 `libpng warning: iCCP: known incorrect sRGB profile`？**
 来自图标素材的 ICC 配置，属于**无害警告**，不影响显示与功能。
 

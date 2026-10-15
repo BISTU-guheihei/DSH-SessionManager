@@ -173,32 +173,87 @@ def main():
 # ----------------------------------------------------------------------
 # Windows: PyInstaller --windowed 打包后挂接父控制台
 # ----------------------------------------------------------------------
+# GetStdHandle 的句柄常量与 GetFileType 的返回类型
+_STD_INPUT_HANDLE = -10
+_STD_OUTPUT_HANDLE = -11
+_STD_ERROR_HANDLE = -12
+_FILE_TYPE_UNKNOWN = 0
+_FILE_TYPE_DISK = 1
+_FILE_TYPE_CHAR = 2
+_FILE_TYPE_PIPE = 3
+_INVALID_HANDLE_VALUE = -1
+
+
+def _std_handle_info(which):
+    '''返回 (句柄值, 类型)。类型: 0=无效/未知 1=文件 2=控制台 3=管道。
+
+    实测要点：windowed exe 的 stdio 句柄可能是无效的，此时 GetFileType
+    返回 0；而被重定向到文件 / 管道时返回 1 / 3，这两种情况下输出本来
+    就有人接收，不需要（也不应该）去碰 CONOUT$。
+    '''
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.GetStdHandle(which)
+    if handle in (None, 0, _INVALID_HANDLE_VALUE):
+        return handle, _FILE_TYPE_UNKNOWN
+    return handle, kernel32.GetFileType(handle)
+
+
 def _attach_parent_console_if_needed():
-    '''windowed exe 无控制台：带参数运行时挂到父控制台，否则命令行输出不可见。'''
+    '''windowed exe 无控制台时，把标准流接到控制台，否则命令行输出不可见。
+
+    只在 stdio 确实没有接收方时才挂接：stdout/stderr 若已重定向到文件或
+    管道（GetFileType 返回 DISK/PIPE），保持原样，绝不覆盖 —— 否则会把
+    用户重定向出来的输出吞掉。
+    '''
     if sys.platform != 'win32':
         return
     if not getattr(sys, 'frozen', False):
         return
-    if sys.stdout is not None:
-        return
     try:
         import ctypes
         kernel32 = ctypes.windll.kernel32
-        attached = kernel32.AttachConsole(0xFFFFFFFF)
-        if not attached:
-            if not kernel32.AllocConsole():
-                return
-        if sys.stdout is None:
-            sys.stdout = open('CONOUT$', 'w', encoding='utf-8', errors='replace')
-        if sys.stderr is None:
-            sys.stderr = open('CONOUT$', 'w', encoding='utf-8', errors='replace')
-        if sys.stdin is None:
-            sys.stdin = open('CONIN$', 'r', encoding='utf-8', errors='replace')
+
+        _, out_type = _std_handle_info(_STD_OUTPUT_HANDLE)
+        _, err_type = _std_handle_info(_STD_ERROR_HANDLE)
+        # stdout/stderr 都已有有效接收方（控制台/文件/管道）就不用管了
+        if out_type != _FILE_TYPE_UNKNOWN and err_type != _FILE_TYPE_UNKNOWN:
+            return
+
+        # 挂到父进程的控制台；失败通常是因为本进程已经有一个控制台
+        # （ERROR_ACCESS_DENIED=5），此时不需要也不应该再 AllocConsole
+        if not kernel32.AttachConsole(0xFFFFFFFF):
+            err = kernel32.GetLastError()
+            if err != 5:  # 5 = ERROR_ACCESS_DENIED，已存在控制台
+                if not kernel32.AllocConsole():
+                    return
+
+        if _std_handle_info(_STD_OUTPUT_HANDLE)[1] == _FILE_TYPE_UNKNOWN:
+            try:
+                sys.stdout = open('CONOUT$', 'w', encoding='utf-8', errors='replace')
+            except OSError:
+                pass
+        if _std_handle_info(_STD_ERROR_HANDLE)[1] == _FILE_TYPE_UNKNOWN:
+            try:
+                sys.stderr = open('CONOUT$', 'w', encoding='utf-8', errors='replace')
+            except OSError:
+                pass
+        # stdin 只在确有控制台输入时才打开：在没有可交互控制台的环境里
+        # 打开 CONIN$ 会直接抛 [WinError 6]（实测）
+        if sys.stdin is None and _std_handle_info(_STD_INPUT_HANDLE)[1] == _FILE_TYPE_CHAR:
+            try:
+                sys.stdin = open('CONIN$', 'r', encoding='utf-8', errors='replace')
+            except OSError:
+                pass
     except Exception:
         pass
 
 
 if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] not in ('gui', 'ui', '--gui'):
-        _attach_parent_console_if_needed()
+        try:
+            _attach_parent_console_if_needed()
+        except Exception:
+            # 控制台挂接只是为了让输出可见，绝不能因此让命令失败
+            pass
     sys.exit(main())
