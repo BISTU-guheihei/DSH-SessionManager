@@ -2,10 +2,21 @@
 
 DeepSeek Harness (DSH) 的会话管理工具：可视化 / 命令行查看、**回收站删除（可恢复）**、**归档/恢复**、搜索过滤、缓存清理，并带一个 **DeepSeek 鲸鱼娘主题** 的精美深色图形界面。
 
-聊天记录实际存储在 `~/.dsh/sessions/`（工作区文件夹 → 会话文件夹 → `session.jsonl.zstd`），
+聊天记录实际存储在 `~/.dsh/sessions/`（工作区文件夹 → 会话文件夹 → 会话日志），
 索引在 `~/.dsh/storages/workspace.json`（含 `archivedSessionIds` 归档标记），
-统计缓存在 `~/.dsh/storages/session_projcache.json`。
+统计缓存在 `~/.dsh/storages/session_projcache/`。
 本工具删除会话时**同步清理这些缓存，不留残留**。
+
+> **兼容性**：DSH 会随版本调整内部存储布局，本工具**新旧格式都支持**，自动识别：
+>
+> | 项目 | 旧版 DSH | 新版 DSH |
+> |------|----------|----------|
+> | 会话日志 | `session.jsonl.zstd` | `session.v4.jsonl.zstd`（版本号在文件名里） |
+> | 统计缓存 | `storages/session_projcache.json`（单文件，`tables.sessions`） | `storages/session_projcache/sessions/<会话ID>.json`（每会话一个文件，`record.rows`） |
+> | 工作区名 | `--E-AAA-proj--` | 非 ASCII 会转义成 `~XXXX~`（如 `E:\资料` → `E-~8D44~6599-`） |
+>
+> 工作区显示名优先取 `workspace.json` 里的**权威原始路径**——目录名编码把 `\` 和 `-`
+> 混同、不可逆，只靠反推会把 `deepseek-harness` 错显示成 `deepseek\harness`。
 
 ## 📣 社区
 
@@ -18,7 +29,7 @@ DeepSeek Harness (DSH) 的会话管理工具：可视化 / 命令行查看、**�
 | 🗑 回收站 | 删除先进回收站（`~/.dsh/.trash/`），可随时恢复；彻底删除才释放空间 |
 | 🗂 归档 / 恢复 | 复用 DSH 的 `archivedSessionIds` 机制，把会话从活跃列表隐藏 / 恢复（按钮文字随选中状态自动切换） |
 | 📊 统计详情 | 显示轮数、步骤、LLM/工具耗时、Token 用量、上下文压力（动画进度条） |
-| 🏷 智能标题 | 无缓存标题的会话自动解码日志、提取首句用户消息为标题，不再出现"(无标题)"（需系统装有 Node.js ≥ 22；无 Node 时降级显示会话 ID） |
+| 🏷 智能标题 | 优先读取 DSH 自己生成的标题（`session/title` 事件 / 统计缓存），其次解压会话日志取首条**真实用户**消息；首句很长时也能得到干净短标题，不再出现"(无标题)"或一串会话 ID（需系统装有 Node.js ≥ 22；无 Node 时降级显示会话 ID） |
 | 🔍 搜索过滤 | 命令行 `search` 按标题 / 会话 ID / 工作区名搜索 |
 | 🔄 实时监视 | GUI 每 3 秒自动静默刷新（保留选择），新会话出现 / 删除消失自动反映；孤儿缓存实时计数 |
 | 🛡 安全保护 | 当前会话永不删除；删除前确认；当前会话 / 工作区高亮与选中区分 |
@@ -162,3 +173,5 @@ python manage_sessions.py build-exe
 - **图标素材**：`whalegirl/` 鲸鱼娘图标来自
   [deepseek-whale-girl-icon](https://github.com/fornarwhal/deepseek-whale-girl-icon)，
   **CC BY-NC-SA 4.0**（须署名、非商用、相同方式共享），与代码 MIT 相互独立；商用请替换为 CC0 素材。
+
+

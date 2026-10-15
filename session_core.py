@@ -9,6 +9,8 @@
 - DSH 运行检测（归档 / 清理缓存等缓存类操作前提示）
 - 命令行界面（list / search / delete / purge / trash / restore / archive 等）
 - 跨平台：Windows / macOS / Linux 路径编码与进程检测
+- 兼容新旧 DSH 存储布局：会话日志 session.jsonl.zstd / session.v4.jsonl.zstd，
+  统计缓存 session_projcache.json（单文件）/ session_projcache/sessions/*.json
 '''
 
 import json
@@ -41,7 +43,10 @@ DSH_HOME = Path(os.environ.get('DSH_HOME', str(Path.home() / '.dsh')))
 SESSIONS_DIR = DSH_HOME / 'sessions'
 STORAGES_DIR = DSH_HOME / 'storages'
 WORKSPACE_JSON = STORAGES_DIR / 'workspace.json'
+# 旧版 DSH：单个 JSON 文件；新版 DSH：storages/session_projcache/sessions/<会话ID>.json
 SESSION_PROJCACHE_JSON = STORAGES_DIR / 'session_projcache.json'
+SESSION_PROJCACHE_DIR = STORAGES_DIR / 'session_projcache'
+SESSION_PROJCACHE_SESSIONS_DIR = SESSION_PROJCACHE_DIR / 'sessions'
 TRASH_DIR = DSH_HOME / '.trash'
 TRASH_MANIFEST_NAME = 'manifest.json'
 
@@ -62,12 +67,19 @@ def decode_workspace(key: str) -> str:
 
     Windows 上 DSH 把 E:\AAA\proj 编码成 --E-AAA-proj--（冒号去掉，\\ 换成 -）；
     POSIX 上 /home/user/proj 编码成 --home-user-proj--（/ 换成 -）。
+    非 ASCII 字符编码成 ~XXXX~（UTF-16 码元十六进制，仅首个转义字符加波浪号，
+    例如 E:\资料 -> E-~8D44~6599-）。
+
+    注意：该编码把 "\\" 和 "-" 都折叠成 "-"，**不可逆**。因此显示用的真实路径
+    优先取 workspace.json 里的权威 path（见 load_workspace_path_map），
+    本函数仅作无索引时的启发式兜底。
     '''
     k = key
     if k.startswith('--'):
         k = k[2:]
     if k.endswith('--'):
         k = k[:-2]
+    k = _unescape_workspace_name(k)
     if IS_WINDOWS:
         path = k.replace('-', '\\')
         if len(path) >= 2 and path[1] == '\\' and path[0].isalpha():
@@ -77,17 +89,119 @@ def decode_workspace(key: str) -> str:
     return '/' + k.replace('-', '/')
 
 
+def _unescape_workspace_name(text: str) -> str:
+    r'''还原 DSH 目录名里的 ~XXXX~ 非 ASCII 转义（仅首个字符带波浪号）。
+
+    DSH 对连续的非 ASCII 字符只写一次开头波浪号：
+    E:\资料 -> E-~8D44~6599-（8D44=资 U+8D44，6599=料 U+6599）。
+    解码时把 ~XXXX~ 转成该码元，后续裸的 4 位十六进制串按紧随其后的码元继续解。
+    '''
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '~' and i + 5 <= n and _is_hex4(text[i + 1:i + 5]):
+            out.append(chr(int(text[i + 1:i + 5], 16)))
+            i += 5
+            # 续接的裸 4 位十六进制码元（必须紧邻，且后面是 '-' 或字符串结尾）
+            while i + 4 <= n and _is_hex4(text[i:i + 4]) and (i + 4 == n or text[i + 4] == '-'):
+                out.append(chr(int(text[i:i + 4], 16)))
+                i += 4
+        else:
+            out.append(ch)
+            i += 1
+    return ''.join(out)
+
+
+def _is_hex4(s: str) -> bool:
+    if len(s) != 4:
+        return False
+    for c in s:
+        if c not in '0123456789abcdefABCDEF':
+            return False
+    return True
+
+
+_WORKSPACE_PATH_MAP_CACHE = None
+
+
+def load_workspace_path_map() -> dict:
+    '''从 workspace.json 读取「编码目录名 -> 真实路径」映射（权威、无歧义）。
+
+    DSH 的目录名编码会丢掉 ":" 并把 "\\" 与 "-" 混同，无法反推；但
+    workspace.json 里存着原始 path，用同样的编码函数正推即可得到准确映射。
+    附带从 path 末尾取末级目录名作为工作区显示名。
+    '''
+    mapping = {}
+    data = _load_json(WORKSPACE_JSON)
+    if not data:
+        return mapping
+    workspaces = (data.get('tables') or {}).get('workspaces') or {}
+    if not isinstance(workspaces, dict):
+        return mapping
+    for entry in workspaces.values():
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get('path')
+        if not path:
+            continue
+        try:
+            mapping[encode_workspace(path)] = str(path)
+        except Exception:
+            continue
+    return mapping
+
+
+def workspace_display_name(workspace_key: str) -> str:
+    '''工作区显示名：优先取权威真实路径，退化到启发式解码。'''
+    global _WORKSPACE_PATH_MAP_CACHE
+    if _WORKSPACE_PATH_MAP_CACHE is None:
+        _WORKSPACE_PATH_MAP_CACHE = load_workspace_path_map()
+    real = _WORKSPACE_PATH_MAP_CACHE.get(workspace_key)
+    if real:
+        return real
+    return decode_workspace(workspace_key)
+
+
 def encode_workspace(path_str) -> str:
     '''与 decode_workspace 相反：把真实路径编码成 DSH 工作区文件夹名。'''
     p = str(Path(path_str))
     if IS_WINDOWS:
         if len(p) >= 2 and p[1] == ':':
             p = p[0] + p[2:]
-        return '--' + p.replace('\\', '-') + '--'
-    # POSIX：去掉开头斜杠，/ 换成 -
-    if p.startswith('/'):
-        p = p[1:]
-    return '--' + p.replace('/', '-') + '--'
+        body = p.replace('\\', '-')
+    else:
+        # POSIX：去掉开头斜杠，/ 换成 -
+        if p.startswith('/'):
+            p = p[1:]
+        body = p.replace('/', '-')
+    return '--' + _escape_workspace_name(body) + '--'
+
+
+def _escape_workspace_name(text: str) -> str:
+    r'''把非 ASCII 字符按 DSH 规则转义成 ~XXXX~。
+
+    DSH 只给连续非 ASCII 串的**第一个**字符加前后波浪号，后续字符仅写 4 位
+    十六进制（E:\资料 -> E-~8D44~6599-）。这里复刻该行为，保证
+    encode_workspace 的结果与磁盘上的目录名逐字节一致。
+    '''
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ord(ch) < 128:
+            out.append(ch)
+            i += 1
+            continue
+        # 连续非 ASCII 串：首个带波浪号，其余裸码元
+        out.append('~' + format(ord(ch), '04X') + '~')
+        i += 1
+        while i < n and ord(text[i]) >= 128:
+            out.append(format(ord(text[i]), '04X'))
+            i += 1
+    return ''.join(out)
 
 
 # ----------------------------------------------------------------------
@@ -214,7 +328,7 @@ def is_session_dir(path: Path) -> bool:
         return False
     if path.name.startswith('session-'):
         return True
-    return (path / 'session.jsonl.zstd').exists()
+    return find_session_log(path) is not None
 
 
 def dir_total_size_mtime(path: Path):
@@ -234,50 +348,110 @@ def dir_total_size_mtime(path: Path):
     return total, mtime
 
 
-def load_session_stats() -> dict:
-    '''从 session_projcache.json 读取每个会话的统计信息（供界面/列表展示）。'''
+def _stats_from_rows(rows) -> dict:
+    '''从 DSH 缓存的 rows 结构里取出标题与统计字段。
+
+    rows 形如 {'title': {'val': ...}, 'sessionStats': {'val': {...}}, ...}。
+    新旧 DSH 版本的行结构一致，差异只在文件布局，因此这里共用。
+    '''
+    if not isinstance(rows, dict):
+        return {}
+    entry = {}
+    title = rows.get('title') or {}
+    if isinstance(title, dict):
+        title_val = title.get('val')
+        if isinstance(title_val, str) and title_val.strip():
+            entry['title'] = title_val.strip()
+    # 新版另有 titleInput.first.text（首句原文），作为标题的兜底
+    if not entry.get('title'):
+        ti = rows.get('titleInput') or {}
+        if isinstance(ti, dict):
+            ti_val = ti.get('val') or {}
+            if isinstance(ti_val, dict):
+                first = ti_val.get('first') or {}
+                if isinstance(first, dict):
+                    text = first.get('text')
+                    if isinstance(text, str) and text.strip():
+                        entry['titleInput'] = text.strip()
+    s = rows.get('sessionStats') or {}
+    if isinstance(s, dict):
+        val = s.get('val') or {}
+        if isinstance(val, dict):
+            entry['turns'] = val.get('turns')
+            entry['steps'] = val.get('steps')
+            entry['llmMs'] = val.get('llmMs')
+            entry['toolMs'] = val.get('toolMs')
+    t = rows.get('tokenUsage') or {}
+    if isinstance(t, dict):
+        val = t.get('val') or {}
+        if isinstance(val, dict):
+            totals = val.get('totals') or {}
+            if isinstance(totals, dict):
+                entry['inputTokens'] = totals.get('uncachedInputTokens')
+                entry['outputTokens'] = totals.get('outputTokens')
+                entry['cacheReadTokens'] = totals.get('cacheReadTokens')
+    p = rows.get('contextPressure') or {}
+    if isinstance(p, dict):
+        val = p.get('val') or {}
+        if isinstance(val, dict):
+            entry['surfaceTokens'] = val.get('surfaceTokens')
+            entry['contextWindow'] = val.get('contextWindow')
+    return entry
+
+
+def _iter_cached_session_ids():
+    '''产出缓存里出现过的全部会话 ID（新旧布局）。'''
+    seen = set()
+    if SESSION_PROJCACHE_SESSIONS_DIR.is_dir():
+        try:
+            for f in SESSION_PROJCACHE_SESSIONS_DIR.iterdir():
+                if f.is_file() and f.suffix == '.json':
+                    seen.add(f.stem)
+        except OSError:
+            pass
     data = _load_json(SESSION_PROJCACHE_JSON)
-    if not data:
-        return {}
-    sessions = (data.get('tables') or {}).get('sessions') or {}
-    if not isinstance(sessions, dict):
-        return {}
+    if data:
+        sessions = (data.get('tables') or {}).get('sessions') or {}
+        if isinstance(sessions, dict):
+            seen.update(sessions.keys())
+    return seen
+
+
+def load_session_stats() -> dict:
+    '''读取每个会话的统计信息（供界面/列表展示）。
+
+    新版 DSH 把缓存拆成 storages/session_projcache/sessions/<会话ID>.json，
+    旧版是单个 storages/session_projcache.json；这里两种都支持。
+    '''
     stats = {}
-    for sid, obj in sessions.items():
-        if not isinstance(obj, dict):
-            continue
-        rows = obj.get('rows') or {}
-        if not isinstance(rows, dict):
-            continue
-        entry = {}
-        title = rows.get('title') or {}
-        if isinstance(title, dict):
-            entry['title'] = title.get('val')
-        s = rows.get('sessionStats') or {}
-        if isinstance(s, dict):
-            val = s.get('val') or {}
-            if isinstance(val, dict):
-                entry['turns'] = val.get('turns')
-                entry['steps'] = val.get('steps')
-                entry['llmMs'] = val.get('llmMs')
-                entry['toolMs'] = val.get('toolMs')
-        t = rows.get('tokenUsage') or {}
-        if isinstance(t, dict):
-            val = t.get('val') or {}
-            if isinstance(val, dict):
-                totals = val.get('totals') or {}
-                if isinstance(totals, dict):
-                    entry['inputTokens'] = totals.get('uncachedInputTokens')
-                    entry['outputTokens'] = totals.get('outputTokens')
-                    entry['cacheReadTokens'] = totals.get('cacheReadTokens')
-        p = rows.get('contextPressure') or {}
-        if isinstance(p, dict):
-            val = p.get('val') or {}
-            if isinstance(val, dict):
-                entry['surfaceTokens'] = val.get('surfaceTokens')
-                entry['contextWindow'] = val.get('contextWindow')
-        if entry:
-            stats[sid] = entry
+    # 新版：每会话一个 JSON 文件
+    if SESSION_PROJCACHE_SESSIONS_DIR.is_dir():
+        try:
+            entries = sorted(SESSION_PROJCACHE_SESSIONS_DIR.iterdir())
+        except OSError:
+            entries = []
+        for f in entries:
+            if not f.is_file() or f.suffix != '.json':
+                continue
+            obj = _load_json(f)
+            if not isinstance(obj, dict):
+                continue
+            record = obj.get('record') if isinstance(obj.get('record'), dict) else obj
+            rows = record.get('rows')
+            entry = _stats_from_rows(rows)
+            if entry:
+                stats[f.stem] = entry
+    # 旧版：单文件 tables.sessions
+    data = _load_json(SESSION_PROJCACHE_JSON)
+    if data:
+        sessions = (data.get('tables') or {}).get('sessions') or {}
+        if isinstance(sessions, dict):
+            for sid, obj in sessions.items():
+                if sid in stats or not isinstance(obj, dict):
+                    continue
+                entry = _stats_from_rows(obj.get('rows'))
+                if entry:
+                    stats[sid] = entry
     return stats
 
 
@@ -292,19 +466,64 @@ def load_archived_ids() -> list:
 
 
 # ----------------------------------------------------------------------
-# 首句标题提取（会话日志 zstd 解码）
+# 标题提取（会话日志 zstd 解码）
 #
-# DSH 会话日志存为 zstd 压缩的多帧串联 JSONL（session.jsonl.zstd）。
-# Python 标准库无法解码 zstd，因此调用 Node 内置的 zlib.zstdDecompress
-# （Node >= 22.24，与 DSH 使用同一实现）逐帧解码，提取首条用户消息
-# 作为会话标题——避免出现"(无标题)"。
+# DSH 会话日志是 zstd 压缩的「多帧串联 JSONL」，文件名随 DSH 版本变化：
+#   旧版: session.jsonl.zstd
+#   新版: session.v4.jsonl.zstd（版本号在文件名里）
+# 因此不再硬编码文件名，改用 find_session_log() 按模式匹配。
 #
-# 提取结果按 (文件路径, 大小, mtime) 缓存，文件未变化时不再重复解码。
+# 标题优先级（extract_title_from_log 一次解码同时拿到全部候选）：
+#   1. DSH 自产标题 session/title 事件且 source.kind == 'provider'（LLM 精炼，最佳）
+#   2. 该事件的 'fallback' 版本（等于首句原文）
+#   3. 首条 **真实用户** 消息（source.kind == 'user'；跳过 runtime-context /
+#      skill-catalog 等系统注入消息）
+# 首句很长时不再截断成乱码——交给 title 事件（DSH 已精炼成短标题）。
+#
+# Python 标准库无法解 zstd，故调用 Node 内置 zlib.zstdDecompress
+# （Node >= 22.24，与 DSH 同一实现），由 title_extract.js 一次性扫描全部帧，
+# 输出一行 JSON。提取结果按 (文件路径, 大小, mtime) 缓存，未变化不重复解码。
 # ----------------------------------------------------------------------
 _SCRIPT_NAME = 'title_extract.js'
-_node_bin = None      # 探测到的 node 可执行路径
-_title_cache = {}     # path -> (size, mtime, title)
-_title_retry_at = {}  # path -> 下次允许重试的时间戳（解码失败时防频繁重试）
+_node_bin = None          # 探测到的 node 可执行路径
+_title_cache = {}         # log_path -> (size, mtime, result_dict)
+_title_retry_at = {}      # log_path -> 下次允许重试的时间戳（失败时防频繁重试）
+
+_LEGACY_LOG_NAME = 'session.jsonl.zstd'
+_LOG_SUFFIX = '.jsonl.zstd'
+
+
+def _log_version_rank(name: str) -> tuple:
+    '''日志文件名排序键：优先版本号更大的（v4 > v3 > 无版本号）。'''
+    import re
+    m = re.match(r'^session\.v(\d+)\.jsonl\.zstd$', name)
+    if m:
+        return (1, int(m.group(1)))
+    return (0, 0)
+
+
+def find_session_log(session_dir) -> Path:
+    '''定位会话目录里的日志文件（兼容 session.jsonl.zstd / session.v4.jsonl.zstd 等）。
+
+    找不到时返回 None。
+    '''
+    d = Path(session_dir)
+    if not d.is_dir():
+        return None
+    # 常见优先，省一次列目录
+    legacy = d / _LEGACY_LOG_NAME
+    if legacy.is_file():
+        return legacy
+    try:
+        cands = [f for f in d.iterdir()
+                 if f.is_file() and f.name.startswith('session') and f.name.endswith(_LOG_SUFFIX)]
+    except OSError:
+        return None
+    if not cands:
+        return None
+    # 版本号大的优先（v4 > v3 > 无版本号），再按名字稳定排序
+    cands.sort(key=lambda p: (_log_version_rank(p.name), p.name), reverse=True)
+    return cands[0]
 
 
 def _find_node() -> str:
@@ -351,67 +570,132 @@ def _title_script_path():
     return ''
 
 
-def extract_title_from_log(session_file: Path) -> str:
-    '''从会话日志提取首句用户消息作为标题。返回空串表示无法提取。'''
+def _truncate_utf8_safe(text: str, limit: int) -> str:
+    '''按显示宽度截断，且绝不切断代理对（避免出现"一对字母"式的乱码尾巴）。'''
+    if text is None:
+        return ''
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    # 若截断点落在高代理项上，回退一位，防止留下孤立代理项
+    if cut and 0xD800 <= ord(cut[-1]) <= 0xDBFF:
+        cut = cut[:-1]
+    return cut.rstrip() + '…'
+
+
+def _parse_extract_output(stdout: str) -> dict:
+    '''解析 title_extract.js 输出的 JSON；兼容纯文本输出（异常兜底）。'''
+    result = {'title': '', 'fallback_title': '', 'first_user_text': '', 'cwd': ''}
+    raw = (stdout or '').strip()
+    if not raw:
+        return result
+    line = raw.splitlines()[-1].strip()
+    if line.startswith('{'):
+        try:
+            obj = json.loads(line)
+        except Exception:
+            obj = None
+        if isinstance(obj, dict):
+            for key in ('title', 'fallback_title', 'first_user_text', 'cwd'):
+                val = obj.get(key)
+                if isinstance(val, str):
+                    result[key] = val.strip()
+            return result
+    # 旧脚本版本只输出纯文本标题
+    result['title'] = raw
+    return result
+
+
+def extract_title_from_log(session_file: Path) -> dict:
+    '''解码会话日志，返回 {title, fallback_title, first_user_text, cwd}。
+
+    无法提取时返回全空 dict（调用方按顺序降级，绝不显示"(无标题)"）。
+    结果按 (大小, mtime) 缓存；失败时节流重试，避免 3 秒自动刷新反复解码。
+    '''
     global _title_cache, _title_retry_at
+    empty = {'title': '', 'fallback_title': '', 'first_user_text': '', 'cwd': ''}
+    if not session_file:
+        return empty
     try:
+        session_file = Path(session_file)
         st = session_file.stat()
         cache_key = str(session_file)
         cached = _title_cache.get(cache_key)
         if cached and cached[0] == st.st_size and cached[1] == st.st_mtime:
             return cached[2]
-        # 节流：同一文件 30s 内不重复解码（防 3s 自动刷新反复触发）
+        # 节流：同一文件 30s 内不重复解码（防自动刷新反复触发）
         import time as _time
         now = _time.time()
         if now < _title_retry_at.get(cache_key, 0):
             cached_old = _title_cache.get(cache_key)
-            return cached_old[2] if cached_old else ''
+            return cached_old[2] if cached_old else empty
 
         node = _find_node()
         script = _title_script_path()
         if not node or not script:
             _title_retry_at[cache_key] = now + 60
-            return ''
+            return empty
 
-        # 调用 node：一次解码提取（设短超时，日志过大时放弃）
         creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0) if IS_WINDOWS else 0
-        result = subprocess.run(
+        proc = subprocess.run(
             [node, script, str(session_file)],
             capture_output=True, text=True, encoding='utf-8',
-            errors='replace', timeout=15,
+            errors='replace', timeout=30,
             creationflags=creationflags,
         )
-        title = (result.stdout or '').strip()
-        _title_cache[cache_key] = (st.st_size, st.st_mtime, title)
-        if not title:
+        result = _parse_extract_output(proc.stdout)
+        _title_cache[cache_key] = (st.st_size, st.st_mtime, result)
+        if not (result.get('title') or result.get('fallback_title')
+                or result.get('first_user_text')):
             # 无结果（空会话/无用户消息）：30s 后再试
             _title_retry_at[cache_key] = now + 30
-        return title
+        return result
     except Exception:
         try:
             import time as _time2
-            _title_retry_at[cache_key] = _time2.time() + 60
+            _title_retry_at[str(session_file)] = _time2.time() + 60
         except Exception:
             pass
-        return ''
+        return empty
 
 
 def infer_display_title(session) -> str:
     '''给一个会话算出"必定非空"的显示标题。
 
-    优先级：projcache 标题 → 日志首句 → 会话 ID 截断（绝不显示"(无标题)"）。
+    优先级：
+      1. DSH 缓存标题（projcache title，通常已是 LLM 精炼结果）
+      2. 日志里 session/title 事件（provider 精炼版 → fallback 首句版）
+      3. 缓存里的首句原文 titleInput.first.text
+      4. 首条真实用户消息
+      5. 会话 ID 截断（绝不显示"(无标题)"）
     '''
     t = session.get('title')
     if t and str(t).strip():
-        return str(t).strip()
-    # 尝试日志首句
+        return _truncate_utf8_safe(str(t), 60)
+
+    # 只解码一次日志，所有候选都从同一份结果里取
+    info = {}
     spath = session.get('path')
     if spath:
-        extracted = extract_title_from_log(Path(spath) / 'session.jsonl.zstd')
-        if extracted and len(extracted) >= 2:
-            if len(extracted) > 60:
-                extracted = extracted[:60] + '…'
-            return extracted
+        log_file = find_session_log(spath)
+        if log_file:
+            info = extract_title_from_log(log_file)
+
+    for key in ('title', 'fallback_title'):
+        val = (info.get(key) or '').strip()
+        if len(val) >= 2:
+            return _truncate_utf8_safe(val, 60)
+
+    stats = session.get('stats') or {}
+    ti = (stats.get('titleInput') or '').strip()
+    if len(ti) >= 2:
+        return _truncate_utf8_safe(ti, 60)
+
+    fu = (info.get('first_user_text') or '').strip()
+    if len(fu) >= 2:
+        return _truncate_utf8_safe(fu, 60)
+
     # 降级：会话 ID 截断（绝不显示"(无标题)"）
     sid = session.get('session_id', '')
     return ('会话 ' + sid) if sid else '(空会话)'
@@ -447,8 +731,8 @@ def scan_workspaces() -> list:
         for child in children:
             if not is_session_dir(child):
                 continue
-            session_file = child / 'session.jsonl.zstd'
-            if session_file.is_file():
+            session_file = find_session_log(child)
+            if session_file is not None:
                 try:
                     st = session_file.stat()
                     size, mtime = st.st_size, st.st_mtime
@@ -463,7 +747,7 @@ def scan_workspaces() -> list:
                 'workspace_path': ws_dir,
                 'session_id': sid,
                 'path': child,
-                'title': st_entry.get('title') or stats_map.get(sid, {}).get('title'),
+                'title': st_entry.get('title'),
                 'size': size,
                 'mtime': mtime,
                 'age': max(0.0, now - mtime),
@@ -475,7 +759,7 @@ def scan_workspaces() -> list:
         workspaces.append({
             'key': ws_dir.name,
             'path': ws_dir,
-            'name': decode_workspace(ws_dir.name),
+            'name': workspace_display_name(ws_dir.name),
             'sessions': sessions,
             'session_count': len(sessions),
             'size': sum(s['size'] for s in sessions),
@@ -523,7 +807,9 @@ def find_workspace_dir_by_entry_path(path_str):
     for d in SESSIONS_DIR.iterdir():
         if d.is_dir():
             try:
-                if os.path.normcase(os.path.normpath(decode_workspace(d.name))) == norm_target:
+                # workspace_display_name 优先用 workspace.json 的权威路径，
+                # 避免目录名编码不可逆（"\\" 与 "-" 混同）导致误判
+                if os.path.normcase(os.path.normpath(workspace_display_name(d.name))) == norm_target:
                     return d
             except OSError:
                 continue
@@ -557,7 +843,17 @@ def _trash_target_dir(session_id: str, timestamp: str = '') -> Path:
 
 
 def _load_projcache_entry(session_id: str):
-    '''读取 session_projcache.json 里某会话的完整缓存条目（删除时快照用）。'''
+    '''读取某会话的完整缓存条目（删除时快照用）。
+
+    新版：storages/session_projcache/sessions/<id>.json（整个文件即条目）
+    旧版：storages/session_projcache.json 的 tables.sessions.<id>
+    返回 dict；不存在时返回 None。
+    '''
+    per_session = SESSION_PROJCACHE_SESSIONS_DIR / (str(session_id) + '.json')
+    if per_session.is_file():
+        obj = _load_json(per_session)
+        if isinstance(obj, dict):
+            return obj
     data = _load_json(SESSION_PROJCACHE_JSON)
     if not data:
         return None
@@ -569,9 +865,17 @@ def _load_projcache_entry(session_id: str):
 
 
 def _write_projcache_entry(session_id: str, entry: dict) -> bool:
-    '''把某会话的缓存条目写回 session_projcache.json（恢复标题/统计用）。'''
+    '''把某会话的缓存条目写回（恢复标题/统计用），按原布局写回。'''
     if not entry:
         return True
+    # 新版布局：整条记录写成一个 JSON 文件
+    if SESSION_PROJCACHE_SESSIONS_DIR.is_dir() or not SESSION_PROJCACHE_JSON.exists():
+        try:
+            SESSION_PROJCACHE_SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return _save_json(SESSION_PROJCACHE_SESSIONS_DIR / (str(session_id) + '.json'), entry)
+    # 旧版布局：合并进单文件
     data = _load_json(SESSION_PROJCACHE_JSON)
     if data is None:
         data = {'unit': {'name': 'session_projcache', 'version': 3},
@@ -608,9 +912,10 @@ def move_sessions_to_trash(sessions: list) -> tuple:
             projcache_entry = _load_projcache_entry(s['session_id'])
             manifest = {
                 'session_id': s['session_id'],
-                'title': s.get('title'),
+                'title': s.get('title') or s.get('display_title'),
+                'display_title': s.get('display_title') or s.get('title'),
                 'workspace_key': s.get('workspace_key'),
-                'workspace_name': decode_workspace(s.get('workspace_key', '')),
+                'workspace_name': workspace_display_name(s.get('workspace_key', '')),
                 'deleted_at': now_iso(),
                 'timestamp': timestamp,
                 'size': s.get('size', 0),
@@ -802,23 +1107,35 @@ def set_archived(session_ids, archived: bool) -> bool:
 # 删除（入回收站）与清理缓存
 # ----------------------------------------------------------------------
 def remove_sessions_from_projcache(session_ids) -> bool:
+    '''从会话统计缓存里删除指定会话（新旧两种布局都处理）。'''
     session_ids = set(session_ids)
     if not session_ids:
         return True
+    ok = True
+    # 新版：每会话一个文件
+    if SESSION_PROJCACHE_SESSIONS_DIR.is_dir():
+        for sid in session_ids:
+            f = SESSION_PROJCACHE_SESSIONS_DIR / (str(sid) + '.json')
+            try:
+                if f.is_file():
+                    f.unlink()
+            except OSError:
+                ok = False
+    # 旧版：单文件
     data = _load_json(SESSION_PROJCACHE_JSON)
     if not data:
-        return True
+        return ok
     sessions = (data.get('tables') or {}).get('sessions') or {}
     if not isinstance(sessions, dict):
-        return True
+        return ok
     changed = False
     for sid in list(sessions.keys()):
         if sid in session_ids:
             del sessions[sid]
             changed = True
     if changed:
-        return _save_json(SESSION_PROJCACHE_JSON, data)
-    return True
+        ok = _save_json(SESSION_PROJCACHE_JSON, data) and ok
+    return ok
 
 
 def _remove_workspace_id_from_global(data: dict, ws_id):
@@ -948,21 +1265,19 @@ def perform_delete_old_sessions(workspaces) -> tuple:
 # 清理残留 + 结果校验
 # ----------------------------------------------------------------------
 def count_projcache_orphans() -> list:
-    '''统计 projcache 中“磁盘上已不存在”的孤儿会话 ID。'''
-    data = _load_json(SESSION_PROJCACHE_JSON)
-    if not data:
-        return []
-    sessions = (data.get('tables') or {}).get('sessions') or {}
-    if not isinstance(sessions, dict):
-        return []
+    '''统计缓存中“磁盘上已不存在”的孤儿会话 ID（新旧布局都算）。'''
     disk_ids = set()
     if SESSIONS_DIR.exists():
         for ws_dir in SESSIONS_DIR.iterdir():
             if ws_dir.is_dir():
-                for child in ws_dir.iterdir():
+                try:
+                    children = list(ws_dir.iterdir())
+                except OSError:
+                    continue
+                for child in children:
                     if is_session_dir(child):
                         disk_ids.add(child.name)
-    return [sid for sid in sessions.keys() if sid not in disk_ids]
+    return sorted(sid for sid in _iter_cached_session_ids() if sid not in disk_ids)
 
 
 def perform_clean_residue() -> dict:
@@ -994,7 +1309,21 @@ def perform_clean_residue() -> dict:
                 except OSError:
                     continue
 
-    # 1) projcache 孤儿清理
+    # 1) 统计缓存孤儿清理（新版每会话一文件；旧版单文件）
+    if SESSION_PROJCACHE_SESSIONS_DIR.is_dir():
+        try:
+            cached_files = list(SESSION_PROJCACHE_SESSIONS_DIR.iterdir())
+        except OSError:
+            cached_files = []
+        for f in cached_files:
+            if not f.is_file() or f.suffix != '.json':
+                continue
+            if f.stem not in live_session_ids:
+                try:
+                    f.unlink()
+                    result['projcache_orphans'] += 1
+                except OSError:
+                    continue
     data = _load_json(SESSION_PROJCACHE_JSON)
     if data:
         sessions = (data.get('tables') or {}).get('sessions') or {}
@@ -1109,7 +1438,7 @@ def confirm_delete(targets) -> bool:
     print()
     print('即将删除以下会话（移入回收站，可恢复）：')
     for s in targets:
-        print('  - ' + decode_workspace(s['workspace_key']) + '  (会话 ' + s['session_id'] + ')')
+        print('  - ' + workspace_display_name(s['workspace_key']) + '  (会话 ' + s['session_id'] + ')')
     print()
     answer = input('确认删除吗？输入 yes 继续，其它任何输入取消: ').strip().lower()
     return answer == 'yes'

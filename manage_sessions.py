@@ -32,9 +32,13 @@ DSH 会话管理工具 —— 鲸鱼娘守护的会话回收站
     python manage_sessions.py build-exe    # 调用 build_exe.py 生成独立 exe
 
 【数据位置】
-    聊天记录:  ~/.dsh/sessions/（工作区文件夹 -> 会话文件夹 -> session.jsonl.zstd）
+    聊天记录:  ~/.dsh/sessions/（工作区文件夹 -> 会话文件夹 -> 会话日志）
+               日志文件名随 DSH 版本变化，工具自动识别：
+               旧版 session.jsonl.zstd / 新版 session.v4.jsonl.zstd
     会话索引:  ~/.dsh/storages/workspace.json（含 archivedSessionIds 归档标记）
-    统计缓存:  ~/.dsh/storages/session_projcache.json
+    统计缓存:  ~/.dsh/storages/session_projcache/（新版：每会话一个 JSON）
+               或 ~/.dsh/storages/session_projcache.json（旧版：单文件）
+               两种布局都支持
     回收站:    ~/.dsh/.trash/（本工具专用，DSH 不会读取）
     支持环境变量 DSH_HOME 覆盖数据目录；DSH_SESSION_ID 指定当前会话。
 
